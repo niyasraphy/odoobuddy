@@ -9,4 +9,7 @@
 - Multiple instances per machine, with automatic port allocation and shared source code per version.
 - Server mode: systemd, Nginx (websocket), Let's Encrypt, ufw, log rotation, tuned workers.
 - VS Code and PyCharm debug configurations for local instances.
+- No database is created for you: the install is verified by installing `contacts` in a
+  temporary database, which is then deleted; create your own in the database manager.
+- Installed IDEs (VS Code, PyCharm) are detected and pre-selected; PyCharm gets a full project.
 - Commands: list, info, use, start, stop, restart, logs, shell, update, backup, restore, remove, doctor, versions.

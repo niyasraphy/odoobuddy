@@ -37,11 +37,10 @@ def test_python_for(version, python):
     assert versions.python_for(version) == python
 
 
-def test_demo_flags_changed_in_odoo_19():
-    assert versions.demo_flags("18.0", demo=False) == ["--without-demo=all"]
-    assert versions.demo_flags("18.0", demo=True) == []
-    assert versions.demo_flags("19.0", demo=False) == []
-    assert versions.demo_flags("20.0", demo=True) == ["--with-demo"]
+def test_no_demo_flags_changed_in_odoo_19():
+    assert versions.no_demo_flags("18.0") == ["--without-demo=all"]
+    assert versions.no_demo_flags("19.0") == []
+    assert versions.no_demo_flags("20.0") == []
 
 
 # -------------------------------------------------------------------- models
@@ -109,7 +108,7 @@ def test_wkhtmltopdf_url():
 
 def test_local_config(make_instance):
     inst = make_instance()
-    conf = render.odoo_conf(inst, db_password="dbpw", admin_password="master")
+    conf = render.odoo_conf(inst, db_password="dbpw", master_password="master")
     assert "db_user = odoo_shop" in conf and "db_password = dbpw" in conf
     assert "http_port = 8069" in conf and "gevent_port = 8072" in conf
     assert "workers = 0" in conf and "dev_mode = reload,xml" in conf
@@ -120,9 +119,10 @@ def test_local_config(make_instance):
 
 def test_server_config_with_enterprise(make_instance, tmp_path):
     inst = make_instance(mode="server", domain="erp.example.com", enterprise_dir=tmp_path / "ent")
-    conf = render.odoo_conf(inst, db_password="x", admin_password="y", workers=5)
-    assert "proxy_mode = True" in conf and "list_db = False" in conf
-    assert "dbfilter = ^shop$" in conf and "workers = 5" in conf
+    conf = render.odoo_conf(inst, db_password="x", master_password="y", workers=5)
+    assert "proxy_mode = True" in conf and "admin_passwd = y" in conf
+    assert "workers = 5" in conf
+    assert "dbfilter" not in conf and "db_name" not in conf  # users create their own databases
     assert "http_interface = 127.0.0.1" in conf  # only reachable through nginx
     addons = next(line for line in conf.splitlines() if line.startswith("addons_path"))
     assert addons.split(" = ")[1].split(",")[0] == str(tmp_path / "ent")  # enterprise first
@@ -241,3 +241,23 @@ def test_runner_never_waits_for_hidden_sudo_prompt():
     assert runner._prefix(sudo=True, as_user=None) == ["sudo", "-n"]
     assert runner._prefix(sudo=False, as_user="postgres")[:4] == ["sudo", "-n", "-u", "postgres"]
     assert Runner(root=True)._prefix(sudo=False, as_user="odoo-x") == ["runuser", "-u", "odoo-x", "--"]
+
+
+def test_find_ide(monkeypatch, tmp_path):
+    from odooinstaller import ide
+
+    monkeypatch.setattr(ide.shutil, "which", lambda cmd: "/usr/bin/code" if cmd == "code" else None)
+    toolbox = tmp_path / "Toolbox" / "scripts"
+    toolbox.mkdir(parents=True)
+    (toolbox / "pycharm").write_text("")
+    monkeypatch.setitem(ide._PATTERNS, "pycharm", [str(toolbox / "pycharm*")])
+    assert ide.detect_ides() == {"vscode": "/usr/bin/code", "pycharm": str(toolbox / "pycharm")}
+    monkeypatch.setitem(ide._PATTERNS, "pycharm", [])
+    assert ide.find_ide("pycharm", desktop_dirs=[]) is None
+
+    apps = tmp_path / "applications"
+    apps.mkdir()
+    (apps / "jetbrains-pycharm.desktop").write_text(
+        '[Desktop Entry]\nName=PyCharm\nExec="/home/u/pycharm-2026.1/bin/pycharm" %f\n'
+    )
+    assert ide.find_ide("pycharm", desktop_dirs=[str(apps)]) == "/home/u/pycharm-2026.1/bin/pycharm"

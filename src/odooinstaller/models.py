@@ -43,7 +43,6 @@ class InstallSpec:
     edition: Edition = "community"
     http_port: int = 8069
     gevent_port: int = 8072
-    demo: bool = False
     ide: Ide = "none"
     domain: str | None = None
     ssl: bool = False
@@ -52,10 +51,6 @@ class InstallSpec:
     firewall: bool = False
     own_source: bool = False
     github_token: str | None = field(default=None, repr=False)
-
-    @property
-    def db_name(self) -> str:
-        return self.name
 
 
 @dataclass
@@ -68,7 +63,6 @@ class Instance:
     mode: Mode
     http_port: int
     gevent_port: int
-    db_name: str
     db_user: str
     python: str
     instance_dir: Path

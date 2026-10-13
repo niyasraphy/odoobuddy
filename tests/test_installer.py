@@ -48,11 +48,16 @@ def test_local_install_writes_files_and_registers(layout, registry):
     assert any("git clone" in c and "--branch 18.0" in c and ".sources/18.0/community" in c for c in cmds)
     assert any("uv venv --seed --python 3.12" in c for c in cmds)
     assert any(c.startswith("sudo -u postgres") and "psql" in c for c in cmds)
-    assert any("-i base --stop-after-init --without-demo=all" in c for c in cmds)
+    # the setup is proven on a throw-away database, which is then deleted
+    check = next(c for c in cmds if "-i base,contacts --stop-after-init" in c)
+    assert "-d odoo_shop_install_check" in check and check.endswith("--without-demo=all")
+    drops = [c for c in cmds if c.startswith("dropdb --if-exists --force odoo_shop_install_check")]
+    assert len(drops) == 2  # leftover cleanup before, and removal after
+    assert cmds.index(check) < len(cmds) - 1 - cmds[::-1].index(drops[-1])
     # passwords travel on stdin, never on the command line
-    assert not any(inst.credentials.db_password in c or inst.credentials.admin_password in c for c in cmds)
+    assert not any(inst.credentials.db_password in c for c in cmds)
     assert any(i and inst.credentials.db_password in i for i in runner.inputs)
-    assert any(i and inst.credentials.admin_password in i for i in runner.inputs)
+    assert f"admin_passwd = {inst.credentials.master_password}" in conf
 
 
 def test_local_plan_has_no_server_steps(layout, registry):
@@ -167,3 +172,28 @@ def test_interrupted_clone_is_downloaded_again(layout, registry):
     inst.download_community()
     assert not leftover.exists()
     assert runner.commands[-1][:2] == ["git", "clone"]
+
+
+def test_failed_check_still_drops_test_database(layout, registry):
+    spec = InstallSpec(name="shop", version="19.0", mode="local")
+    runner = RecordingRunner(fail_on=str(layout.local_home / "shop" / "venv" / "bin" / "python"))
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    inst.write_config()
+    from odooinstaller.system import CommandError
+
+    with pytest.raises(CommandError):
+        inst.test_installation()
+    assert runner.joined()[-1].startswith("dropdb --if-exists --force odoo_shop_install_check")
+
+
+def test_pycharm_project_files(layout, registry):
+    spec = InstallSpec(name="shop", version="20.0", mode="local", ide="pycharm")
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner())
+    inst.configure_ide()
+    idea = layout.local_home / "shop" / ".idea"
+    iml = (idea / "shop.iml").read_text()
+    assert str(inst.instance.community_dir) in iml and "venv" in iml
+    assert 'project-jdk-name="Python 3.12 (shop)"' in (idea / "misc.xml").read_text()
+    (idea / "misc.xml").write_text("user changed")
+    inst.configure_ide()
+    assert (idea / "misc.xml").read_text() == "user changed"  # never overwritten

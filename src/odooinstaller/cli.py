@@ -12,11 +12,13 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 
 from . import __version__, operations, sources, ui
-from .installer import Installer, suggested_workers
+from .ide import detect_ides
+from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
 from .models import Instance
 from .registry import Registry, RegistryError, resolve
@@ -80,6 +82,29 @@ def _instance(name: Optional[str]) -> Instance:
         raise _fail(str(exc)) from None
 
 
+def _database(instance: Instance, db: Optional[str]) -> str:
+    """Pick the database a command works on: --db, the only one, or ask."""
+    try:
+        databases = operations.list_databases(_runner(False, f"db-{instance.name}"), instance)
+    except (CommandError, FileNotFoundError) as exc:
+        raise _fail(f"cannot list databases of {instance.name}: {exc}") from None
+    if db is not None:
+        if db not in databases:
+            known = ", ".join(databases) or "none yet"
+            raise _fail(f"instance {instance.name} has no database {db!r} (databases: {known})")
+        return db
+    if not databases:
+        raise _fail(f"{instance.name} has no database yet. Create one at {instance.url}/web/database/manager")
+    if len(databases) == 1:
+        return databases[0]
+    if not sys.stdin.isatty():
+        raise _fail(f"{instance.name} has several databases, choose one with --db: {', '.join(databases)}")
+    try:
+        return QuestionaryPrompter(console.print).select("Which database?", [(d, d) for d in databases])
+    except WizardAbort:
+        raise typer.Exit(1) from None
+
+
 def _require_root_for(instance: Instance, action: str) -> None:
     if instance.mode == "server" and not is_root():
         raise _fail(f"{action} a server instance needs root: sudo odooinstaller {' '.join(sys.argv[1:])}")
@@ -128,7 +153,6 @@ def install(
     edition: Optional[str] = typer.Option(None, help="community or enterprise"),
     mode: Optional[str] = typer.Option(None, help="local or server"),
     port: Optional[int] = typer.Option(None, help="Web port (websocket port is chosen automatically)"),
-    demo: Optional[bool] = typer.Option(None, "--demo/--no-demo", help="Load demo data"),
     ide: Optional[str] = typer.Option(None, help="Local only: vscode, pycharm or none"),
     domain: Optional[str] = typer.Option(None, help="Server only: domain name, e.g. erp.example.com"),
     no_domain: bool = typer.Option(False, "--no-domain", help="Server only: no domain (no Nginx/SSL)"),
@@ -161,7 +185,6 @@ def install(
         "edition": edition,
         "mode": mode,
         "http_port": port,
-        "demo": demo,
         "ide": ide,
         "ssl": ssl,
         "email": email,
@@ -194,6 +217,7 @@ def install(
         ),
         is_root=is_root() or dry_run,
         suggested_workers=suggested_workers(cpu_count(), memory_mb()),
+        installed_ides=detect_ides(),
         preset=preset,
     )
     try:
@@ -245,17 +269,26 @@ def install(
     for warning in installer.warnings:
         console.print(f"[yellow]⚠ {warning}[/yellow]")
     creds = installer.credentials
+    first_db = (
+        "[bold]Create your first database[/]\n"
+        f"  1. Open {inst.url}/web/database/manager\n"
+        f"  2. Master password: [bold]{creds.master_password}[/]\n"
+        "  3. Choose the database name, language, country, demo data and admin password\n"
+        f"  [dim](the master password is also saved as admin_passwd in {inst.config_path})[/]"
+    )
+    body = Group(
+        f"[bold green]✓ Odoo {inst.version} is installed and working[/] "
+        f"[dim](tested by installing '{CHECK_MODULE}' in a temporary database, then deleted)[/]\n",
+        first_db,
+        "",
+        ui.details_table(ui.instance_details(inst)),
+    )
+    help_text = ui.ide_help(inst)
+    if help_text:
+        body = Group(body, "", help_text.rstrip())
+    console.print(Panel(body, title=inst.label, expand=False))
     console.print(
-        Panel(
-            f"[bold green]Odoo is ready:[/] {inst.url}\n\n"
-            f"Login: [bold]admin[/]   Password: [bold]{creds.admin_password}[/]\n"
-            f"Master password (database manager): stored in {inst.config_path}\n"
-            f"Folder: {inst.instance_dir}\n\n"
-            f"[dim]Save the password now, it is not shown again.\n"
-            f"Manage it with: odooinstaller start|stop|logs|update|backup {inst.name}[/]",
-            title=inst.label,
-            expand=False,
-        )
+        f"[dim]Manage it: odooinstaller start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
     )
 
 
@@ -321,25 +354,14 @@ def info(name: Optional[str] = typer.Argument(None, help="Instance name")) -> No
     """Show full details of an instance."""
     inst = _instance(name)
     ui.banner(inst)
-    rows = {
-        "Status": operations.status(inst),
-        "URL": inst.url,
-        "Web / websocket ports": f"{inst.http_port} / {inst.gevent_port}",
-        "Database / user": f"{inst.db_name} / {inst.db_user}",
-        "Python": inst.python,
-        "Folder": inst.instance_dir,
-        "Config": inst.config_path,
-        "Log": inst.log_path,
-        "Data (filestore)": inst.data_dir,
-        "Community code": inst.community_dir,
-        "Enterprise code": inst.enterprise_dir or "-",
-        "Source": "private" if inst.own_source else "shared with same version",
-        "Created": inst.created_at,
-    }
+    rows = [("Status", operations.status(inst)), *ui.instance_details(inst)]
     if inst.mode == "server":
-        rows["Service"] = inst.service
-    for key, value in rows.items():
-        console.print(f"  [bold]{key:<22}[/] {value}")
+        rows.append(("Domain / SSL", f"{inst.domain or '-'} / {'yes' if inst.ssl else 'no'}"))
+    rows.append(("Created", inst.created_at))
+    console.print(ui.details_table(rows))
+    help_text = ui.ide_help(inst)
+    if help_text:
+        console.print("\n" + help_text.rstrip())
 
 
 @app.command()
@@ -405,11 +427,15 @@ def logs(
 
 
 @app.command()
-def shell(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
-    """Open an Odoo shell (Python with `env`) on the instance's database."""
+def shell(
+    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    db: Optional[str] = typer.Option(None, "--db", help="Database (asked if the instance has several)"),
+) -> None:
+    """Open an Odoo shell (Python with `env`) on one of the instance's databases."""
     inst = _instance(name)
-    ui.banner(inst, "Odoo shell — exit with Ctrl+D")
-    cmd = operations.shell_command(inst)
+    database = _database(inst, db)
+    ui.banner(inst, f"Odoo shell on database '{database}' — exit with Ctrl+D")
+    cmd = operations.shell_command(inst, database)
     os.chdir(inst.instance_dir)
     os.execvp(cmd[0], cmd)
 
@@ -463,16 +489,19 @@ def update(
 @app.command()
 def backup(
     name: Optional[str] = typer.Argument(None, help="Instance name"),
+    db: Optional[str] = typer.Option(None, "--db", help="Database (asked if the instance has several)"),
     to: Optional[Path] = typer.Option(None, "--to", help="Folder for the backup zip"),
 ) -> None:
-    """Back up the database and filestore to a zip (Odoo's standard format)."""
+    """Back up a database and its filestore to a zip (Odoo's standard format)."""
     inst = _instance(name)
     _require_root_for(inst, "Backing up")
-    ui.banner(inst, "Backup")
+    database = _database(inst, db)
+    ui.banner(inst, f"Backup of database '{database}'")
     runner = _runner(False, f"backup-{inst.name}")
     try:
         path = _with_status(
-            "Backing up…", lambda: operations.backup(runner, inst, to or operations.default_backup_dir(inst))
+            "Backing up…",
+            lambda: operations.backup(runner, inst, database, to or operations.default_backup_dir(inst)),
         )
     except (CommandError, FileNotFoundError) as exc:
         raise _fail(f"backup failed: {exc}") from None
@@ -483,17 +512,18 @@ def backup(
 def restore(
     archive: Path = typer.Argument(..., exists=True, dir_okay=False, help="Backup zip file"),
     name: Optional[str] = typer.Option(None, "--name", help="Instance to restore into"),
+    db: str = typer.Option(..., "--db", help="Database to restore into (created or replaced)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the typed confirmation"),
 ) -> None:
-    """Restore a backup zip into an instance (replaces its database and files)."""
+    """Restore a backup zip into a database of an instance (replacing it if it exists)."""
     inst = _instance(name)
     _require_root_for(inst, "Restoring")
-    ui.banner(inst, f"Restore from {archive}")
-    if not yes:
-        _confirm_by_typing(inst, f"This REPLACES the database '{inst.db_name}' and its files.")
+    ui.banner(inst, f"Restore {archive} into database '{db}'")
+    if not yes and db in operations.list_databases(_runner(False, f"restore-{inst.name}"), inst):
+        _confirm_by_typing(inst, f"Database '{db}' exists and will be REPLACED, with its files.")
     runner = _runner(False, f"restore-{inst.name}")
     try:
-        _with_status("Restoring…", lambda: operations.restore(runner, inst, archive))
+        _with_status("Restoring…", lambda: operations.restore(runner, inst, archive, db))
     except (CommandError, ValueError) as exc:
         raise _fail(f"restore failed: {exc}") from None
     console.print("[green]✓ Restored[/]")

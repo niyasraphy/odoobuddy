@@ -103,6 +103,8 @@ class WizardContext:
     resolve_domain: Callable[[str], set[str]] = resolve_domain
     public_ip: Callable[[], str | None] = public_ip
     preset: dict[str, Any] = field(default_factory=dict)
+    # IDE -> launcher command (None when not installed), used to label and pre-select choices.
+    installed_ides: dict[str, str | None] = field(default_factory=dict)
 
 
 def _validate_name(instances: dict[str, Instance]) -> Callable[[str], str]:
@@ -217,9 +219,6 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         raise WizardAbort(error)
     gevent_port = gevent_port_for(int(http_port), others, ctx.port_in_use)
 
-    # 6. Demo data
-    demo = pre["demo"] if "demo" in pre else p.confirm("Load demo data?", default=False)
-
     spec = InstallSpec(
         name=name,
         version=version,
@@ -227,22 +226,30 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         edition=edition,
         http_port=int(http_port),
         gevent_port=gevent_port,
-        demo=demo,
         github_token=token,
         own_source=bool(pre.get("own_source", False)),
     )
 
     if mode == "local":
+        installed = ctx.installed_ides
+
+        def label(ide: str, name: str, hint: str) -> str:
+            if ide not in installed:
+                return f"{name} ({hint})"
+            state = "✓ installed" if installed[ide] else "not found on this computer"
+            return f"{name} ({hint}) - {state}"
+
+        default_ide = next((i for i in ("vscode", "pycharm") if installed.get(i)), "vscode")
         spec.ide = pre.get("ide") or cast(
             Ide,
             p.select(
-                "Which IDE do you use?",
+                "Which IDE do you use? (it is not installed or changed, only configured)",
                 [
-                    ("vscode", "VS Code (debug with F5)"),
-                    ("pycharm", "PyCharm (ready run configuration)"),
+                    ("vscode", label("vscode", "VS Code", "debug with F5")),
+                    ("pycharm", label("pycharm", "PyCharm", "ready run configuration")),
                     ("none", "None / other (I'll use ./start.sh)"),
                 ],
-                default="vscode",
+                default=default_ide,
             ),
         )
         return spec

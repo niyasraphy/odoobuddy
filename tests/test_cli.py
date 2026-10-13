@@ -38,7 +38,8 @@ def test_list_info_use(isolated, make_instance):
     assert result.exit_code == 0 and "Now working with: hr · Odoo 19.0" in result.output
 
     result = runner.invoke(app, ["info"])  # uses the current instance
-    assert "▶ hr" in result.output and "8169 / 8172" in result.output
+    assert "▶ hr" in result.output and "8169 web, 8172 websocket" in result.output
+    assert "/web/database/manager" in result.output
 
 
 def test_unknown_instance_lists_known_ones(isolated, make_instance):
@@ -71,7 +72,6 @@ def test_install_dry_run_changes_nothing(tmp_path, monkeypatch):
             "shop",
             "--port",
             "18069",
-            "--no-demo",
             "--ide",
             "none",
             "--dry-run",

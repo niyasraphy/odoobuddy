@@ -31,7 +31,7 @@ def _fake_pg_dump(cmd):
 
 def test_backup_creates_odoo_format_zip(configured, tmp_path):
     runner = RecordingRunner(on_run=_fake_pg_dump)
-    path = operations.backup(runner, configured, tmp_path / "backups")
+    path = operations.backup(runner, configured, "shop", tmp_path / "backups")
     with zipfile.ZipFile(path) as zf:
         names = set(zf.namelist())
         manifest = json.loads(zf.read("manifest.json"))
@@ -49,7 +49,7 @@ def test_restore_replaces_database_and_filestore(configured, tmp_path, monkeypat
         zf.writestr("dump.sql", "-- dump")
         zf.writestr("filestore/cd/new", "new file")
     runner = RecordingRunner()
-    operations.restore(runner, configured, archive)
+    operations.restore(runner, configured, archive, "shop")
     cmds = runner.joined()
     assert cmds[0] == "dropdb --if-exists --force shop"
     assert cmds[1] == "createdb --owner odoo_shop shop"
@@ -64,11 +64,11 @@ def test_restore_rejects_non_backups(configured, tmp_path):
     with zipfile.ZipFile(bad, "w") as zf:
         zf.writestr("hello.txt", "hi")
     with pytest.raises(ValueError, match=r"no dump\.sql"):
-        operations.restore(RecordingRunner(), configured, bad)
+        operations.restore(RecordingRunner(), configured, bad, "shop")
     not_zip = tmp_path / "x.txt"
     not_zip.write_text("hi")
     with pytest.raises(ValueError, match="not a zip"):
-        operations.restore(RecordingRunner(), configured, not_zip)
+        operations.restore(RecordingRunner(), configured, not_zip, "shop")
 
 
 def test_instances_sharing_source(registry, make_instance, layout):
@@ -92,6 +92,8 @@ def test_instances_sharing_source(registry, make_instance, layout):
 def test_update_upgrades_every_instance_on_shared_code(registry, make_instance, monkeypatch):
     monkeypatch.setattr(operations, "status", lambda inst: operations.STATUS_STOPPED)
     monkeypatch.setattr(operations, "find_uv", lambda: "uv")
+    dbs = {"a": ["a_main", "a_test"], "b": ["b_main"]}
+    monkeypatch.setattr(operations, "list_databases", lambda runner, inst: dbs[inst.name])
     registry.add(make_instance("a"))
     registry.add(make_instance("b", http_port=8169, gevent_port=8172))
     runner = RecordingRunner()
@@ -100,7 +102,8 @@ def test_update_upgrades_every_instance_on_shared_code(registry, make_instance, 
     assert [i.name for i in affected] == ["a", "b"]
     assert sum("fetch --progress --depth 1 origin 18.0" in c for c in cmds) == 1
     assert any(c.endswith("gc --prune=now --quiet") for c in cmds)
-    assert sum("-u all --stop-after-init" in c for c in cmds) == 2
+    upgraded = [c.split(" -d ")[1].split()[0] for c in cmds if "-u all --stop-after-init" in c]
+    assert upgraded == ["a_main", "a_test", "b_main"]  # every database of every affected instance
 
 
 def test_remove_local_instance(registry, configured, layout, monkeypatch):
@@ -133,7 +136,20 @@ def test_remove_server_instance(registry, make_instance, layout, monkeypatch):
 def test_logs_and_shell_commands(make_instance):
     local = make_instance()
     assert operations.logs_command(local, 50, True) == ["tail", "-n", "50", "-F", str(local.log_path)]
-    assert operations.shell_command(local)[2:4] == ["shell", "-c"]
+    cmd = operations.shell_command(local, "mydb")
+    assert cmd[2:4] == ["shell", "-c"] and cmd[-2:] == ["-d", "mydb"]
+
+
+def test_list_databases_hides_install_check(configured):
+    class Runner(RecordingRunner):
+        def run(self, cmd, **kwargs):
+            result = super().run(cmd, **kwargs)
+            result.stdout = "shop\nodoo_shop_install_check\nshop_copy\n"
+            return result
+
+    runner = Runner()
+    assert operations.list_databases(runner, configured) == ["shop", "shop_copy"]
+    assert runner.envs[0]["PGUSER"] == "odoo_shop"  # connects as the instance's own user
 
 
 def test_doctor_reports_port_clash_and_missing_files(registry, make_instance, monkeypatch):

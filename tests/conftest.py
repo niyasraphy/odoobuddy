@@ -82,7 +82,6 @@ def make_instance(layout: Layout) -> Callable[..., Instance]:
             mode=mode,
             http_port=8069,
             gevent_port=8072,
-            db_name=name,
             db_user=db_role_for(name),
             python="3.12",
             instance_dir=instance_dir,

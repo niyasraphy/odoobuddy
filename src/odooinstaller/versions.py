@@ -48,8 +48,6 @@ def available_versions(timeout: float = 20) -> list[str]:
     return parse_branches(result.stdout) or list(FALLBACK_VERSIONS)
 
 
-def demo_flags(version: str, demo: bool) -> list[str]:
-    """Odoo 19 stopped loading demo data by default and replaced --without-demo."""
-    if major(version) >= 19:
-        return ["--with-demo"] if demo else []
-    return [] if demo else ["--without-demo=all"]
+def no_demo_flags(version: str) -> list[str]:
+    """Odoo 19 stopped loading demo data by default (and replaced --without-demo)."""
+    return [] if major(version) >= 19 else ["--without-demo=all"]

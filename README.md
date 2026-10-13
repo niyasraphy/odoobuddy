@@ -17,14 +17,24 @@ The wizard asks a few questions, then sets up everything:
   ✓ access to odoo/enterprise confirmed
 ? Instance name:                   shop
 ? Which port should Odoo run on?   8069
-? Load demo data?                  No
-? Which IDE do you use?            VS Code (debug with F5)
+? Which IDE do you use?            PyCharm (ready run configuration) - ✓ installed
 
-╭──────────── odoo · shop · Odoo 19.0 Enterprise ────────────╮
-│ Odoo is ready: http://localhost:8069                        │
-│ Login: admin   Password: x8Kf2...                           │
-╰─────────────────────────────────────────────────────────────╯
+✓ [8/10] Test installation (contacts in a temporary database) (1m 12s)
+
+╭──────────────── shop · Odoo 19.0 Enterprise ─────────────────╮
+│ ✓ Odoo 19.0 is installed and working                         │
+│                                                              │
+│ Create your first database                                   │
+│   1. Open http://localhost:8069/web/database/manager         │
+│   2. Master password: x8Kf2...                               │
+│   3. Choose name, language, country, demo data, admin login  │
+╰──────────────────────────────────────────────────────────────╯
 ```
+
+The installer **does not create your database**. It proves the setup works by installing
+a real module (`contacts`) in a temporary database, deletes it, and lets you create your
+own databases in Odoo's database manager, choosing the name, language, country, demo data
+and admin password yourself.
 
 > `odooinstaller` is a community project and is **not affiliated with Odoo S.A.**
 > It is also unrelated to the `odoo-installer` package on PyPI.
@@ -35,7 +45,7 @@ The wizard asks a few questions, then sets up everything:
 - **Community or Enterprise.** Your GitHub token is checked *before* cloning. If it doesn't have access, the wizard offers to retry or continues with Community. The token is never saved to disk, git config or logs.
 - **Many instances side by side.** Run Odoo 17, 18, 19 and 20 at the same time, or several instances of one version. Each instance gets its own Python environment, config, database user, ports, filestore and logs.
 - **The right Python for each version**, installed automatically with [uv](https://github.com/astral-sh/uv). Odoo 16 gets 3.10 and Odoo 19 gets 3.12, with no system Python changes.
-- **Local mode** for development: ready-to-debug **VS Code** (`F5`) or **PyCharm** run configurations, dev mode with auto-reload, and a `start.sh` script.
+- **Local mode** for development: ready-to-debug **VS Code** (`F5`) or **PyCharm** projects, dev mode with auto-reload, and a `start.sh` script. Installed IDEs are detected and pre-selected. Your IDE is never installed or changed; only `.vscode/` or `.idea/` is written in the instance folder.
 - **Server mode** for production:
   - a dedicated system user and a **systemd** service
   - **Nginx** with websocket support
@@ -61,11 +71,11 @@ odooinstaller use shop             # set the "current" instance
 
 odooinstaller start|stop|restart shop
 odooinstaller logs shop            # follow the log (-n 500 --no-follow also work)
-odooinstaller shell shop           # Odoo shell with `env`
+odooinstaller shell shop           # Odoo shell with `env` (--db to pick a database)
 
-odooinstaller update shop          # pull latest code + upgrade modules (-u all)
+odooinstaller update shop          # pull latest code + upgrade modules in every database
 odooinstaller backup shop          # database + filestore → zip (Odoo's own format)
-odooinstaller restore backup.zip --name shop
+odooinstaller restore backup.zip --name shop --db shop_copy
 odooinstaller remove shop          # asks you to type "shop" to confirm
 
 odooinstaller doctor               # check the system and every instance
@@ -85,17 +95,53 @@ Odoo's code is downloaded **once per version** and shared by all instances of th
 
 ## Where things go
 
-| | Local | Server |
-|---|---|---|
-| Instance folder | `~/odoo/<name>/` | `/opt/odooinstaller/instances/<name>/` |
-| Odoo source (shared) | `~/odoo/.sources/<version>/` | `/opt/odooinstaller/sources/<version>/` |
-| Config | `~/odoo/<name>/odoo.conf` | `/etc/odoo/<name>.conf` |
-| Logs | terminal / `~/odoo/<name>/logs/` | `/var/log/odoo/<name>.log` |
-| Filestore | `~/odoo/<name>/data/` | `/var/lib/odoo/<name>/` |
-| Service | – | `odoo-<name>.service` |
-| Nginx | – | `/etc/nginx/sites-available/odoo-<name>.conf` |
+### Local (your computer)
 
-Put your own modules in the instance's `addons/` folder. It is already in the addons path.
+```
+~/odoo/
+├── .sources/                     ← Odoo code, downloaded once per version, shared
+│   ├── 19.0/
+│   │   ├── community/            ← odoo/odoo, branch 19.0 (only the latest commit)
+│   │   └── enterprise/           ← odoo/enterprise (only if you chose Enterprise)
+│   └── 20.0/
+│       └── community/
+│
+├── shop/                         ← one folder per instance
+│   ├── addons/                   ← YOUR custom modules go here (already in addons_path)
+│   ├── odoo.conf                 ← configuration (ports, DB user, addons_path, master password)
+│   ├── venv/                     ← this instance's own Python
+│   ├── data/filestore/<db>/      ← attachments of each database
+│   ├── logs/odoo.log             ← log when started with `odooinstaller start`
+│   ├── backups/                  ← `odooinstaller backup` zips
+│   ├── start.sh                  ← run in the terminal
+│   ├── .idea/  or  .vscode/      ← IDE project (PyCharm or VS Code)
+│   └── .odooinstaller            ← marks the folder, so commands know which instance you're in
+│
+└── test20/                       ← another instance, same layout
+```
+
+`addons_path` order: Enterprise → your `addons/` → Community `addons/` → Community `odoo/addons/`.
+With `--own-source`, the code lives in `~/odoo/<name>/src/community` (and `src/enterprise`) instead.
+
+### Server (production)
+
+```
+/opt/odooinstaller/
+├── sources/<version>/community/  ← shared Odoo code (enterprise/ next to it)
+├── instances/<name>/addons/      ← YOUR custom modules
+├── instances/<name>/venv/        ← Python
+└── python/                       ← Python versions used by the instances
+
+/etc/odoo/<name>.conf             ← configuration
+/var/lib/odoo/<name>/filestore/   ← attachments
+/var/log/odoo/<name>.log          ← log (rotated weekly)
+/var/backups/odooinstaller/<name>/← backups
+/etc/systemd/system/odoo-<name>.service
+/etc/nginx/sites-available/odoo-<name>.conf
+```
+
+Each server instance runs as its own system user `odoo-<name>`, and every instance has its
+own PostgreSQL user `odoo_<name>` (it can only see its own databases).
 
 ## Automation (no questions)
 
@@ -104,7 +150,7 @@ Every question has a flag. For example:
 ```bash
 export ODOO_GITHUB_TOKEN=ghp_...          # only for Enterprise
 sudo -E odooinstaller install --mode server --version 19.0 --edition enterprise \
-    --name shop --port 8069 --no-demo --domain erp.example.com --ssl \
+    --name shop --port 8069 --domain erp.example.com --ssl \
     --email admin@example.com --workers 5 --firewall --yes
 ```
 

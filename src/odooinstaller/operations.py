@@ -136,8 +136,28 @@ def logs_command(instance: Instance, lines: int, follow: bool) -> list[str]:
     return cmd
 
 
-def shell_command(instance: Instance) -> list[str]:
-    cmd = _odoo(instance, "-d", instance.db_name, subcommand="shell")
+def list_databases(runner: Runner, instance: Instance) -> list[str]:
+    """Databases owned by the instance's PostgreSQL user, i.e. the ones its users created."""
+    settings = postgres.read_db_settings(instance.config_path)
+    result = runner.run(
+        [
+            "psql",
+            "-X",
+            "-tA",
+            "-d",
+            "postgres",
+            "-c",
+            "SELECT d.datname FROM pg_database d JOIN pg_roles r ON d.datdba = r.oid "
+            "WHERE r.rolname = current_user AND NOT d.datistemplate ORDER BY 1",
+        ],
+        env=postgres.client_env(settings),
+    )
+    check_db = f"{instance.db_user}_install_check"
+    return [line.strip() for line in result.stdout.splitlines() if line.strip() and line.strip() != check_db]
+
+
+def shell_command(instance: Instance, db: str) -> list[str]:
+    cmd = _odoo(instance, "-d", db, subcommand="shell")
     if instance.mode == "server":
         prefix = (
             ["runuser", "-u", instance.system_user, "--"]
@@ -171,7 +191,8 @@ def update(
     affected = instances_sharing_source(registry, instance)
     for inst in affected:
         if inst.mode == "server":
-            backup(runner, inst, backup_dir or default_backup_dir(inst))
+            for db in list_databases(runner, inst):
+                backup(runner, inst, db, backup_dir or default_backup_dir(inst))
     sources.update(runner, instance.community_dir, instance.version)
     if instance.enterprise_dir is not None and (instance.enterprise_dir / ".git").exists():
         if github_token:
@@ -199,11 +220,12 @@ def update(
         was_running = status(inst) == STATUS_RUNNING
         if was_running:
             stop(runner, inst)
-        runner.run(
-            _odoo(inst, "-d", inst.db_name, "-u", modules, "--stop-after-init"),
-            as_user=_as_user(inst),
-            cwd=inst.instance_dir,
-        )
+        for db in list_databases(runner, inst):
+            runner.run(
+                _odoo(inst, "-d", db, "-u", modules, "--stop-after-init"),
+                as_user=_as_user(inst),
+                cwd=inst.instance_dir,
+            )
         if was_running:
             start(runner, inst)
     return affected
@@ -218,29 +240,29 @@ def default_backup_dir(instance: Instance) -> Path:
     return instance.instance_dir / "backups"
 
 
-def backup(runner: Runner, instance: Instance, dest_dir: Path) -> Path:
+def backup(runner: Runner, instance: Instance, db: str, dest_dir: Path) -> Path:
     """Write a zip in Odoo's own backup format: dump.sql + filestore/ + manifest.json."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    target = dest_dir / f"{instance.name}_{stamp}.zip"
+    target = dest_dir / f"{instance.name}_{db}_{stamp}.zip"
     if runner.dry_run:
-        runner.console.print(f"  [dim]backup {instance.db_name} -> {target}[/dim]")
+        runner.console.print(f"  [dim]backup {db} -> {target}[/dim]")
         return target
     dest_dir.mkdir(parents=True, exist_ok=True)
     settings = postgres.read_db_settings(instance.config_path)
     with tempfile.TemporaryDirectory(prefix="odooinstaller-") as tmp:
         dump = Path(tmp) / "dump.sql"
         runner.run(
-            ["pg_dump", "--no-owner", "--format=plain", "--file", str(dump), instance.db_name],
+            ["pg_dump", "--no-owner", "--format=plain", "--file", str(dump), db],
             env=postgres.client_env(settings),
         )
         manifest = {
             "odoo_dump": "1",
-            "db_name": instance.db_name,
+            "db_name": db,
             "version": instance.version,
             "major_version": instance.version,
             "created_by": "odooinstaller",
         }
-        filestore = instance.data_dir / "filestore" / instance.db_name
+        filestore = instance.data_dir / "filestore" / db
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.write(dump, "dump.sql")
             zf.writestr("manifest.json", json.dumps(manifest, indent=2))
@@ -252,29 +274,29 @@ def backup(runner: Runner, instance: Instance, dest_dir: Path) -> Path:
     return target
 
 
-def restore(runner: Runner, instance: Instance, archive: Path) -> None:
-    """Replace the instance's database and filestore with the contents of ``archive``."""
+def restore(runner: Runner, instance: Instance, archive: Path, db: str) -> None:
+    """Restore ``archive`` into database ``db``, replacing it (and its files) if it exists."""
     if not zipfile.is_zipfile(archive):
         raise ValueError(f"{archive} is not a zip backup")
     with zipfile.ZipFile(archive) as zf:
         if "dump.sql" not in zf.namelist():
             raise ValueError(f"{archive} has no dump.sql (not an Odoo backup?)")
     if runner.dry_run:
-        runner.console.print(f"  [dim]restore {archive} -> {instance.db_name}[/dim]")
+        runner.console.print(f"  [dim]restore {archive} -> {db}[/dim]")
         return
     was_running = status(instance) == STATUS_RUNNING
     if was_running:
         stop(runner, instance)
     settings = postgres.read_db_settings(instance.config_path)
     env = postgres.client_env(settings)
-    filestore = instance.data_dir / "filestore" / instance.db_name
+    filestore = instance.data_dir / "filestore" / db
     with tempfile.TemporaryDirectory(prefix="odooinstaller-") as tmp:
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(tmp)
-        runner.run(["dropdb", "--if-exists", "--force", instance.db_name], env=env)
-        runner.run(["createdb", "--owner", settings["user"], instance.db_name], env=env)
+        runner.run(["dropdb", "--if-exists", "--force", db], env=env)
+        runner.run(["createdb", "--owner", settings["user"], db], env=env)
         runner.run(
-            ["psql", "-v", "ON_ERROR_STOP=1", "-q", "-f", str(Path(tmp) / "dump.sql"), instance.db_name],
+            ["psql", "-v", "ON_ERROR_STOP=1", "-q", "-f", str(Path(tmp) / "dump.sql"), db],
             env=env,
         )
         shutil.rmtree(filestore, ignore_errors=True)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import secrets
 import shlex
+import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -12,9 +13,10 @@ from pathlib import Path
 from . import postgres, render, sources
 from .layout import Layout
 from .models import InstallSpec, Instance, db_role_for
+from .postgres import client_env, read_db_settings
 from .registry import MARKER_FILE, Registry
 from .system import CommandError, Runner, command_exists, os_release, ssh_port
-from .versions import demo_flags, python_for
+from .versions import no_demo_flags, python_for
 
 APT_BASE = [
     "git",
@@ -41,6 +43,10 @@ APT_SERVER = ["nginx", "certbot", "python3-certbot-nginx", "ufw"]
 WKHTMLTOPDF_RELEASE = "0.12.6.1-3"
 # Odoo needs the "patched Qt" build of wkhtmltopdf. Noble reuses the jammy package.
 WKHTMLTOPDF_CODENAMES = {"jammy": "jammy", "noble": "jammy", "bookworm": "bookworm"}
+
+# Installed into a throw-away database to prove the instance works. It pulls in mail,
+# web and their assets, so most dependency or Python package problems show up here.
+CHECK_MODULE = "contacts"
 
 EXTRA_PACKAGES = ["setuptools<81", "wheel"]
 LOCAL_DEV_PACKAGES = ["debugpy", "watchdog"]
@@ -86,7 +92,6 @@ class Step:
 class Credentials:
     db_password: str
     master_password: str
-    admin_password: str
 
 
 class Installer:
@@ -105,7 +110,6 @@ class Installer:
         self.credentials = Credentials(
             db_password=generate_password(),
             master_password=generate_password(),
-            admin_password=generate_password(16),
         )
         self.instance = self._build_instance()
         self.warnings: list[str] = []
@@ -126,7 +130,6 @@ class Installer:
             mode=spec.mode,
             http_port=spec.http_port,
             gevent_port=spec.gevent_port,
-            db_name=spec.db_name,
             db_user=db_role_for(spec.name),
             python=python_for(spec.version),
             instance_dir=instance_dir,
@@ -162,8 +165,7 @@ class Installer:
             steps.append(Step(f"Create system user {inst.system_user}", self.create_system_user))
         steps += [
             Step("Write configuration", self.write_config),
-            Step(f"Create database {inst.db_name}", self.init_database),
-            Step("Set admin password", self.set_admin_password),
+            Step(f"Test installation ({CHECK_MODULE} in a temporary database)", self.test_installation),
         ]
         if not server and inst.ide != "none":
             ide_name = {"vscode": "VS Code", "pycharm": "PyCharm"}[inst.ide]
@@ -276,7 +278,7 @@ class Installer:
             render.odoo_conf(
                 inst,
                 db_password=self.credentials.db_password,
-                admin_password=self.credentials.master_password,
+                master_password=self.credentials.master_password,
                 workers=self.spec.workers,
             ),
             mode=0o640 if server else 0o600,
@@ -294,21 +296,33 @@ class Installer:
     def _as_user(self) -> str | None:
         return self.instance.system_user if self.instance.mode == "server" else None
 
-    def init_database(self) -> None:
-        inst = self.instance
-        cmd = self._odoo_cmd("-d", inst.db_name, "-i", "base", "--stop-after-init")
-        cmd += demo_flags(inst.version, self.spec.demo)
-        self.runner.run(cmd, as_user=self._as_user(), cwd=inst.instance_dir)
+    @property
+    def check_db(self) -> str:
+        return f"{self.instance.db_user}_install_check"
 
-    def set_admin_password(self) -> None:
+    def test_installation(self) -> None:
+        """Prove the setup works by installing a real module, then throw the database away.
+
+        The user creates their own first database afterwards (name, language, country,
+        demo data and admin password are all chosen in Odoo's database manager).
+        """
         inst = self.instance
-        script = (
-            "user = env.ref('base.user_admin')\n"
-            f"user.password = {self.credentials.admin_password!r}\n"
-            "env.cr.commit()\n"
-        )
-        cmd = self._odoo_cmd("-d", inst.db_name, "--log-level=warn", subcommand="shell")
-        self.runner.run(cmd, as_user=self._as_user(), input=script, cwd=inst.instance_dir)
+        self.drop_check_db()  # leftover from an interrupted run
+        cmd = self._odoo_cmd("-d", self.check_db, "-i", f"base,{CHECK_MODULE}", "--stop-after-init")
+        cmd += no_demo_flags(inst.version)
+        try:
+            self.runner.run(cmd, as_user=self._as_user(), cwd=inst.instance_dir)
+        finally:
+            self.drop_check_db()
+
+    def drop_check_db(self) -> None:
+        inst = self.instance
+        if self.runner.dry_run:
+            self.runner.run(["dropdb", "--if-exists", self.check_db])
+            return
+        env = client_env(read_db_settings(inst.config_path))
+        self.runner.run(["dropdb", "--if-exists", "--force", self.check_db], env=env)
+        shutil.rmtree(inst.data_dir / "filestore" / self.check_db, ignore_errors=True)
 
     def configure_ide(self) -> None:
         inst = self.instance
@@ -318,11 +332,19 @@ class Installer:
             self.runner.write_file(vscode / "settings.json", render.vscode_settings(inst))
             self.runner.write_file(vscode / "extensions.json", render.vscode_extensions())
         elif inst.ide == "pycharm":
-            run_configs = inst.instance_dir / ".idea" / "runConfigurations"
+            idea = inst.instance_dir / ".idea"
             self.runner.write_file(
-                run_configs / f"Odoo_{inst.name.replace('-', '_')}.xml",
+                idea / "runConfigurations" / f"Odoo_{inst.name.replace('-', '_')}.xml",
                 render.pycharm_run_config(inst),
             )
+            # Project files: written once, never overwriting settings PyCharm or the user changed.
+            for filename, content in (
+                (f"{inst.name}.iml", render.pycharm_module(inst)),
+                ("modules.xml", render.pycharm_modules(inst)),
+                ("misc.xml", render.pycharm_misc(inst)),
+            ):
+                if not (idea / filename).exists() or self.runner.dry_run:
+                    self.runner.write_file(idea / filename, content)
 
     def install_service(self) -> None:
         inst = self.instance
