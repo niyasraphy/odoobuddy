@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -65,19 +66,32 @@ def git_auth_env(token: str) -> dict[str, str]:
     }
 
 
+# Only the latest commit of one branch: about 10x smaller and faster than a full clone.
+SHALLOW = ["--depth", "1", "--single-branch"]
+
+
+def is_complete_clone(runner: Runner, dest: Path, branch: str) -> bool:
+    """True if ``dest`` holds a usable checkout of ``branch`` (not a half-finished download)."""
+    if not (dest / ".git").exists():
+        return False
+    head = runner.run(["git", "-C", str(dest), "rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    return head.returncode == 0 and head.stdout.strip() == branch
+
+
 def clone(runner: Runner, repo: str, branch: str, dest: Path, *, env: dict[str, str] | None = None) -> bool:
     """Shallow-clone one branch. Returns False if ``dest`` already had the code."""
-    if (dest / ".git").exists():
+    if is_complete_clone(runner, dest, branch) and not runner.dry_run:
         return False
+    if dest.exists() and not runner.dry_run:
+        # Left behind by an interrupted download (e.g. Ctrl+C): start again cleanly.
+        shutil.rmtree(dest)
     runner.mkdir(dest.parent)
     runner.run(
         [
             "git",
             "clone",
             "--progress",
-            "--depth",
-            "1",
-            "--single-branch",
+            *SHALLOW,
             "--branch",
             branch,
             repo,
@@ -90,8 +104,12 @@ def clone(runner: Runner, repo: str, branch: str, dest: Path, *, env: dict[str, 
 
 def update(runner: Runner, dest: Path, branch: str, *, env: dict[str, str] | None = None) -> None:
     git_env = {"GIT_TERMINAL_PROMPT": "0", **(env or {})}
-    runner.run(["git", "-C", str(dest), "fetch", "--depth", "1", "origin", branch], env=git_env)
-    runner.run(["git", "-C", str(dest), "reset", "--hard", "FETCH_HEAD"])
+    git = ["git", "-C", str(dest)]
+    runner.run([*git, "fetch", "--progress", "--depth", "1", "origin", branch], env=git_env)
+    runner.run([*git, "reset", "--hard", "FETCH_HEAD"])
+    # Drop the previous commit's objects so repeated updates don't grow the folder.
+    runner.run([*git, "reflog", "expire", "--expire=now", "--all"])
+    runner.run([*git, "gc", "--prune=now", "--quiet"])
 
 
 def clone_community(runner: Runner, version: str, dest: Path) -> bool:

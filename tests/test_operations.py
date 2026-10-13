@@ -98,7 +98,8 @@ def test_update_upgrades_every_instance_on_shared_code(registry, make_instance, 
     affected = operations.update(runner, registry, registry.get("a"), github_token=None)
     cmds = runner.joined()
     assert [i.name for i in affected] == ["a", "b"]
-    assert sum("fetch --depth 1 origin 18.0" in c for c in cmds) == 1
+    assert sum("fetch --progress --depth 1 origin 18.0" in c for c in cmds) == 1
+    assert any(c.endswith("gc --prune=now --quiet") for c in cmds)
     assert sum("-u all --stop-after-init" in c for c in cmds) == 2
 
 

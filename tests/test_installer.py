@@ -135,10 +135,35 @@ def test_own_source_uses_private_folder(layout, registry):
     assert inst.instance.community_dir == layout.local_home / "patched" / "src" / "community"
 
 
-def test_rerun_skips_existing_clone(layout, registry):
+def test_clone_is_shallow_single_branch(layout, registry):
+    spec = InstallSpec(name="shop", version="20.0", mode="local")
+    runner = RecordingRunner()
+    Installer(spec, layout=layout, registry=registry, runner=runner).download_community()
+    clone = runner.commands[-1]
+    assert clone[:2] == ["git", "clone"]
+    assert clone[clone.index("--depth") + 1] == "1"
+    assert "--single-branch" in clone and clone[clone.index("--branch") + 1] == "20.0"
+
+
+def test_rerun_skips_complete_clone(layout, registry, monkeypatch):
+    from odooinstaller import sources
+
     spec = InstallSpec(name="shop", version="18.0", mode="local")
     runner = RecordingRunner()
     inst = Installer(spec, layout=layout, registry=registry, runner=runner)
     (inst.instance.community_dir / ".git").mkdir(parents=True)
+    monkeypatch.setattr(sources, "is_complete_clone", lambda r, d, b: True)
     inst.download_community()
     assert runner.commands == []
+
+
+def test_interrupted_clone_is_downloaded_again(layout, registry):
+    spec = InstallSpec(name="shop", version="18.0", mode="local")
+    runner = RecordingRunner()  # rev-parse prints nothing -> not a usable checkout
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    leftover = inst.instance.community_dir / ".git" / "half-downloaded.pack"
+    leftover.parent.mkdir(parents=True)
+    leftover.write_text("x")
+    inst.download_community()
+    assert not leftover.exists()
+    assert runner.commands[-1][:2] == ["git", "clone"]
