@@ -197,3 +197,47 @@ def test_installed_ide_is_labelled_and_preselected():
     assert seen["choices"]["pycharm"].endswith("✓ installed")
     assert seen["choices"]["vscode"].endswith("not found on this computer")
     assert not any("demo" in q.lower() for q in p.asked)
+
+
+def test_editing_one_setting_only_asks_that_question():
+    from odooinstaller.wizard import answers_without, editable_fields
+
+    first = run_wizard(Scripted("local", "18.0", "community", "shop", "8069", False, "vscode"), make_ctx())
+    labels = dict(editable_fields(first))
+    assert labels["http_port"] == "Port: 8069" and "domain" not in labels
+
+    p = Scripted("9069")  # only the port is asked again
+    edited = run_wizard(p, make_ctx(preset=answers_without(first, "http_port")))
+    assert (edited.name, edited.version, edited.ide, edited.http_port) == ("shop", "18.0", "vscode", 9069)
+    assert len(p.asked) == 1 and "port" in p.asked[0]
+
+
+def test_switching_to_server_asks_the_server_questions():
+    from odooinstaller.wizard import answers_without
+
+    first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "pycharm"), make_ctx())
+    p = Scripted("server", True, "erp.example.com", True, "", "", False)
+    edited = run_wizard(p, make_ctx(is_root=True, preset=answers_without(first, "mode")))
+    assert edited.mode == "server" and edited.domain == "erp.example.com" and edited.ssl
+    assert edited.ide == "none" and edited.name == "shop"
+
+
+def test_changing_edition_to_enterprise_asks_for_token():
+    from odooinstaller.wizard import answers_without
+
+    first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "none"), make_ctx())
+    edited = run_wizard(Scripted("enterprise", "good"), make_ctx(preset=answers_without(first, "edition")))
+    assert edited.edition == "enterprise" and edited.github_token == "good"
+
+
+def test_server_email_left_empty_is_not_asked_again():
+    from odooinstaller.wizard import answers_without
+
+    p = Scripted(
+        "server", "19.0", "community", "prod", "8069", False, True, "erp.example.com", True, "", "", True
+    )
+    first = run_wizard(p, make_ctx(is_root=True))
+    assert first.email is None
+    q = Scripted("4")
+    edited = run_wizard(q, make_ctx(is_root=True, preset=answers_without(first, "workers")))
+    assert edited.workers == 4 and len(q.asked) == 1

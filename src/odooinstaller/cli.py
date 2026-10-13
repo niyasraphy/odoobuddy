@@ -33,7 +33,14 @@ from .system import (
     port_in_use,
 )
 from .versions import available_versions
-from .wizard import QuestionaryPrompter, WizardAbort, WizardContext, run_wizard
+from .wizard import (
+    QuestionaryPrompter,
+    WizardAbort,
+    WizardContext,
+    answers_without,
+    editable_fields,
+    run_wizard,
+)
 
 app = typer.Typer(
     help="Install and manage multiple Odoo instances, on your computer or on a server.",
@@ -237,9 +244,28 @@ def install(
     except WizardAbort as exc:
         raise _fail(str(exc)) from None
 
-    console.print(ui.summary(spec))
-    if not yes and not dry_run and not typer.confirm("Install now?", default=True):
-        raise typer.Exit(1)
+    prompter = QuestionaryPrompter(console.print)
+    while True:
+        console.print(ui.summary(spec))
+        if yes or dry_run:
+            break
+        try:
+            choice = prompter.select(
+                "What next?",
+                [("install", "Install now"), ("edit", "Change a setting"), ("cancel", "Cancel")],
+                default="install",
+            )
+            if choice == "install":
+                break
+            if choice == "cancel":
+                console.print("Cancelled, nothing was changed.")
+                raise typer.Exit(1)
+            key = prompter.select("Which setting?", editable_fields(spec))
+            ctx.preset = answers_without(spec, key)
+            ctx.instances = registry.all()
+            spec = run_wizard(prompter, ctx)
+        except WizardAbort as exc:
+            raise _fail(str(exc)) from None
 
     runner = _runner(dry_run, f"install-{spec.name}")
     installer = Installer(spec, layout=_layout(), registry=registry, runner=runner)

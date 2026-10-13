@@ -290,8 +290,9 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
         if want_ssl:
             spec.ssl = True
             spec.email = (
-                pre.get("email")
-                or p.text(
+                pre["email"]
+                if "email" in pre
+                else p.text(
                     "Email for SSL expiry notices (optional, Enter to skip):",
                     validate=lambda v: "" if not v or EMAIL_RE.fullmatch(v) else "enter a valid email",
                 )
@@ -356,3 +357,67 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
             repos.append(RepoSpec(url=url, branch=branch, token=token))
         else:
             p.say(f"[red]✗ skipped {url}: {result.message}[/red]")
+
+
+# Settings that can be changed from the summary, and the answers each one invalidates.
+_SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall")
+EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
+    "mode": ("Local or server", ("mode", "ide", *_SERVER_KEYS)),
+    "version": ("Odoo version", ("version",)),
+    "edition": ("Edition (Community / Enterprise)", ("edition", "github_token")),
+    "name": ("Instance name", ("name",)),
+    "http_port": ("Port", ("http_port",)),
+    "ide": ("IDE", ("ide",)),
+    "repos": ("Custom repositories", ("repos",)),
+    "domain": ("Domain name", ("domain", "ssl", "email")),
+    "ssl": ("SSL certificate", ("ssl", "email")),
+    "workers": ("Number of workers", ("workers",)),
+    "firewall": ("Firewall", ("firewall",)),
+}
+
+
+def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
+    """(key, label with current value) for the settings that apply to this spec."""
+    current = {
+        "mode": spec.mode,
+        "version": spec.version,
+        "edition": spec.edition,
+        "name": spec.name,
+        "http_port": str(spec.http_port),
+        "ide": spec.ide,
+        "repos": f"{len(spec.repos)} selected",
+        "domain": spec.domain or "none",
+        "ssl": "yes" if spec.ssl else "no",
+        "workers": str(spec.workers),
+        "firewall": "yes" if spec.firewall else "no",
+    }
+    keys = ["mode", "version", "edition", "name", "http_port", "repos"]
+    keys += (
+        ["ide"]
+        if spec.mode == "local"
+        else ["domain", *(["ssl"] if spec.domain else []), "workers", "firewall"]
+    )
+    return [(k, f"{EDITABLE[k][0]}: {current[k]}") for k in keys]
+
+
+def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
+    """The spec's answers as presets, minus the ones that must be asked again to change ``key``."""
+    preset: dict[str, Any] = {
+        "mode": spec.mode,
+        "version": spec.version,
+        "edition": spec.edition,
+        "name": spec.name,
+        "http_port": spec.http_port,
+        "repos": list(spec.repos),
+    }
+    if spec.github_token:
+        preset["github_token"] = spec.github_token
+    if spec.mode == "local":
+        preset["ide"] = spec.ide
+    else:
+        preset.update(domain=spec.domain, workers=spec.workers, firewall=spec.firewall)
+        if spec.domain:
+            preset.update(ssl=spec.ssl, email=spec.email)
+    for dropped in EDITABLE[key][1]:
+        preset.pop(dropped, None)
+    return preset
