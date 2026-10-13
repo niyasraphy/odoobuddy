@@ -71,7 +71,18 @@ def clone(runner: Runner, repo: str, branch: str, dest: Path, *, env: dict[str, 
         return False
     runner.mkdir(dest.parent)
     runner.run(
-        ["git", "clone", "--depth", "1", "--single-branch", "--branch", branch, repo, str(dest)],
+        [
+            "git",
+            "clone",
+            "--progress",
+            "--depth",
+            "1",
+            "--single-branch",
+            "--branch",
+            branch,
+            repo,
+            str(dest),
+        ],
         env={"GIT_TERMINAL_PROMPT": "0", **(env or {})},
     )
     return True

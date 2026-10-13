@@ -7,7 +7,9 @@ import shlex
 import shutil
 import socket
 import subprocess
-from collections.abc import Mapping, Sequence
+import threading
+from collections import deque
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -40,6 +42,10 @@ class Runner:
     dry_run: bool = False
     log_file: Path | None = None
     root: bool = field(default_factory=is_root)
+    # Called with each line a command prints, so the UI can show live progress.
+    on_output: Callable[[str], None] | None = None
+    # Set by SudoSession: sudo must never stop to ask for a password behind a spinner.
+    sudo_noninteractive: bool = False
 
     def run(
         self,
@@ -59,21 +65,36 @@ class Runner:
             return subprocess.CompletedProcess(full, 0, "", "")
         self._log(f"$ {shlex.join(full)}")
         run_env = {**os.environ, **env} if env else None
-        result = subprocess.run(
+        proc = subprocess.Popen(
             full,
-            input=input,
+            stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             env=run_env,
             cwd=cwd,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            check=False,
+            bufsize=1,
         )
-        self._log(result.stdout)
-        if check and result.returncode != 0:
-            tail = "\n".join(result.stdout.strip().splitlines()[-25:])
-            raise CommandError(full, result.returncode, tail)
-        return result
+        if input is not None:
+            assert proc.stdin is not None
+            proc.stdin.write(input)
+            proc.stdin.close()
+        tail: deque[str] = deque(maxlen=25)
+        collected: list[str] = []
+        assert proc.stdout is not None
+        # Text mode turns progress-bar carriage returns into separate lines.
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            self._log(line)
+            collected.append(line)
+            tail.append(line)
+            if self.on_output and line.strip():
+                self.on_output(line.strip())
+        returncode = proc.wait()
+        output = "\n".join(collected)
+        if check and returncode != 0:
+            raise CommandError(full, returncode, "\n".join(tail))
+        return subprocess.CompletedProcess(full, returncode, output, "")
 
     def write_file(self, path: Path, content: str, *, mode: int = 0o644, owner: str | None = None) -> None:
         if self.dry_run:
@@ -96,11 +117,12 @@ class Runner:
             shutil.chown(path, owner, owner)
 
     def _prefix(self, *, sudo: bool, as_user: str | None) -> list[str]:
+        sudo_cmd = ["sudo", "-n"] if self.sudo_noninteractive else ["sudo"]
         if as_user:
             # runuser ships with util-linux, so it works on minimal servers without sudo.
-            return ["runuser", "-u", as_user, "--"] if self.root else ["sudo", "-u", as_user, "-H", "--"]
+            return ["runuser", "-u", as_user, "--"] if self.root else [*sudo_cmd, "-u", as_user, "-H", "--"]
         if sudo and not self.root:
-            return ["sudo"]
+            return sudo_cmd
         return []
 
     def _log(self, text: str) -> None:
@@ -108,6 +130,44 @@ class Runner:
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as fh:
                 fh.write(text if text.endswith("\n") else text + "\n")
+
+
+class SudoSession:
+    """Ask for the sudo password once, visibly, then keep it fresh during long operations.
+
+    While active, the runner calls ``sudo -n`` so a command can never sit waiting for a
+    password that the progress spinner would hide.
+    """
+
+    REFRESH_SECONDS = 60
+
+    def __init__(self, runner: Runner) -> None:
+        self.runner = runner
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def __enter__(self) -> SudoSession:
+        if self.runner.root or self.runner.dry_run:
+            return self
+        if subprocess.run(["sudo", "-n", "-v"], capture_output=True, check=False).returncode != 0:
+            self.runner.console.print(
+                "[bold]Administrator rights are needed[/bold] (system packages, PostgreSQL). "
+                "Enter your password below; it is not shown while typing."
+            )
+            if subprocess.run(["sudo", "-v"], check=False).returncode != 0:
+                raise PermissionError("sudo password was not accepted")
+        self.runner.sudo_noninteractive = True
+        self._thread = threading.Thread(target=self._refresh, daemon=True)
+        self._thread.start()
+        return self
+
+    def _refresh(self) -> None:
+        while not self._stop.wait(self.REFRESH_SECONDS):
+            subprocess.run(["sudo", "-n", "-v"], capture_output=True, check=False)
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self.runner.sudo_noninteractive = False
 
 
 def port_in_use(port: int) -> bool:

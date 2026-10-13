@@ -207,3 +207,37 @@ def test_git_auth_env_hides_token_from_url():
     assert header.startswith("Authorization: Basic ")
     assert base64.b64decode(header.split()[-1]).decode() == "x-access-token:ghp_secret"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
+
+
+# -------------------------------------------------------------------- runner
+
+
+def test_runner_streams_output_and_logs(tmp_path):
+    from odooinstaller.system import Runner
+
+    seen = []
+    runner = Runner(log_file=tmp_path / "x.log", root=False, on_output=seen.append)
+    result = runner.run(["sh", "-c", "printf 'one\\rtwo\\nthree\\n'; cat"], input="from-stdin\n")
+    assert seen == ["one", "two", "three", "from-stdin"]  # \r progress updates become lines
+    assert result.stdout.splitlines()[-1] == "from-stdin"
+    assert "from-stdin" in (tmp_path / "x.log").read_text()
+
+
+def test_runner_failure_keeps_tail(tmp_path):
+    from odooinstaller.system import CommandError, Runner
+
+    runner = Runner(root=False)
+    with pytest.raises(CommandError) as info:
+        runner.run(["sh", "-c", "seq 1 40; exit 3"])
+    assert info.value.returncode == 3
+    assert info.value.output.splitlines() == [str(i) for i in range(16, 41)]
+    assert runner.run(["sh", "-c", "exit 2"], check=False).returncode == 2
+
+
+def test_runner_never_waits_for_hidden_sudo_prompt():
+    from odooinstaller.system import Runner
+
+    runner = Runner(root=False, sudo_noninteractive=True)
+    assert runner._prefix(sudo=True, as_user=None) == ["sudo", "-n"]
+    assert runner._prefix(sudo=False, as_user="postgres")[:4] == ["sudo", "-n", "-u", "postgres"]
+    assert Runner(root=True)._prefix(sudo=False, as_user="odoo-x") == ["runuser", "-u", "odoo-x", "--"]

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
+import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 import typer
+from rich.markup import escape
 from rich.panel import Panel
 
 from . import __version__, operations, sources, ui
@@ -16,7 +20,16 @@ from .installer import Installer, suggested_workers
 from .layout import Layout
 from .models import Instance
 from .registry import Registry, RegistryError, resolve
-from .system import CommandError, Runner, cpu_count, is_root, memory_mb, os_release, port_in_use
+from .system import (
+    CommandError,
+    Runner,
+    SudoSession,
+    cpu_count,
+    is_root,
+    memory_mb,
+    os_release,
+    port_in_use,
+)
 from .versions import available_versions
 from .wizard import QuestionaryPrompter, WizardAbort, WizardContext, run_wizard
 
@@ -195,32 +208,40 @@ def install(
     runner = _runner(dry_run, f"install-{spec.name}")
     installer = Installer(spec, layout=_layout(), registry=registry, runner=runner)
     steps = installer.plan()
-    for number, step in enumerate(steps, 1):
-        title = f"[{number}/{len(steps)}] {step.title}"
-        try:
-            if dry_run:
-                console.print(f"[bold]{title}[/bold]")
-                step.action()
-            else:
-                with console.status(title + "…"):
+    if not dry_run:
+        console.print(f"[dim]Full log: {runner.log_file}[/dim]")
+    try:
+        sudo = SudoSession(runner).__enter__()
+    except PermissionError as exc:
+        raise _fail(str(exc)) from None
+    try:
+        for number, step in enumerate(steps, 1):
+            title = f"[{number}/{len(steps)}] {step.title}"
+            try:
+                if dry_run:
+                    console.print(f"[bold]{escape(title)}[/bold]")
                     step.action()
-                console.print(f"[green]✓[/green] {title}")
-        except CommandError as exc:
-            console.print(f"[red]✗ {title} failed[/red]")
-            if exc.output:
-                console.print(Panel(exc.output, title="last output", border_style="red"))
-            console.print(
-                f"Full log: {runner.log_file}\n"
-                "Fix the problem and run the same command again; finished steps are skipped."
-            )
-            raise typer.Exit(1) from None
+                else:
+                    elapsed = _progress(title, step.action, runner)
+                    console.print(f"[green]✓[/green] {escape(title)} [dim]({_duration(elapsed)})[/dim]")
+            except CommandError as exc:
+                console.print(f"[red]✗ {escape(title)} failed[/red]")
+                if exc.output:
+                    console.print(Panel(escape(exc.output), title="last output", border_style="red"))
+                console.print(
+                    f"Full log: {runner.log_file}\n"
+                    "Fix the problem and run the same command again; finished steps are skipped."
+                )
+                raise typer.Exit(1) from None
+    finally:
+        sudo.__exit__()
 
     if dry_run:
         console.print("\n[yellow]Dry run: nothing was changed.[/yellow]")
         return
     inst = installer.instance
     if inst.mode == "local":
-        _with_status("Starting Odoo…", lambda: operations.start(runner, inst))
+        _progress("Starting Odoo", lambda: operations.start(runner, inst), runner)
     for warning in installer.warnings:
         console.print(f"[yellow]⚠ {warning}[/yellow]")
     creds = installer.credentials
@@ -236,6 +257,43 @@ def install(
             expand=False,
         )
     )
+
+
+def _duration(seconds: float) -> str:
+    seconds = int(seconds)
+    return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
+
+
+def _progress(title: str, action: Callable[[], object], runner: Runner) -> float:
+    """Run ``action`` under a spinner that shows elapsed time and the latest output line."""
+    started = time.monotonic()
+    last_line = ""
+    done = threading.Event()
+    with console.status(escape(title) + "…") as status:
+
+        def refresh() -> None:
+            text = f"{escape(title)}… [dim]{_duration(time.monotonic() - started)}[/dim]"
+            if last_line:
+                text += f"\n  [dim]{escape(last_line[:110])}[/dim]"
+            status.update(text)
+
+        def on_output(line: str) -> None:
+            nonlocal last_line
+            last_line = line
+            refresh()
+
+        def tick() -> None:
+            while not done.wait(1):
+                refresh()
+
+        threading.Thread(target=tick, daemon=True).start()
+        runner.on_output = on_output
+        try:
+            action()
+        finally:
+            done.set()
+            runner.on_output = None
+    return time.monotonic() - started
 
 
 def _with_status(message: str, fn):  # type: ignore[no-untyped-def]
@@ -300,7 +358,9 @@ def start(name: Optional[str] = typer.Argument(None, help="Instance name")) -> N
     """Start an instance."""
     inst = _instance(name)
     ui.banner(inst, "Starting")
-    ok = _with_status("Starting Odoo…", lambda: operations.start(_runner(False, f"start-{inst.name}"), inst))
+    runner = _runner(False, f"start-{inst.name}")
+    with SudoSession(runner):
+        ok = _with_status("Starting Odoo…", lambda: operations.start(runner, inst))
     if ok:
         console.print(f"[green]✓ Running:[/] {inst.url}")
     else:
@@ -312,7 +372,9 @@ def stop(name: Optional[str] = typer.Argument(None, help="Instance name")) -> No
     """Stop an instance."""
     inst = _instance(name)
     ui.banner(inst, "Stopping")
-    operations.stop(_runner(False, f"stop-{inst.name}"), inst)
+    runner = _runner(False, f"stop-{inst.name}")
+    with SudoSession(runner):
+        operations.stop(runner, inst)
     console.print("[green]✓ Stopped[/]")
 
 
@@ -321,7 +383,9 @@ def restart(name: Optional[str] = typer.Argument(None, help="Instance name")) ->
     """Restart an instance."""
     inst = _instance(name)
     ui.banner(inst, "Restarting")
-    ok = _with_status("Restarting…", lambda: operations.restart(_runner(False, f"restart-{inst.name}"), inst))
+    runner = _runner(False, f"restart-{inst.name}")
+    with SudoSession(runner):
+        ok = _with_status("Restarting…", lambda: operations.restart(runner, inst))
     if not ok:
         raise _fail(f"Odoo did not come back. Check: odooinstaller logs {inst.name}")
     console.print(f"[green]✓ Running:[/] {inst.url}")
@@ -447,7 +511,9 @@ def remove(
     ui.banner(inst, "Remove")
     if not yes and not dry_run:
         _confirm_by_typing(inst, f"This deletes '{inst.name}', its databases and all its files.")
-    operations.remove(_runner(dry_run, f"remove-{inst.name}"), _registry(), _layout(), inst)
+    runner = _runner(dry_run, f"remove-{inst.name}")
+    with SudoSession(runner):
+        operations.remove(runner, _registry(), _layout(), inst)
     console.print(
         "[yellow]Dry run: nothing was changed.[/]" if dry_run else f"[green]✓ Removed {inst.name}[/]"
     )
