@@ -10,7 +10,22 @@ from pathlib import Path
 from .layout import Layout
 from .models import Instance, Mode
 
-MARKER_FILE = ".odooinstaller"
+MARKER_FILE = ".odoobuddy"
+# Earlier releases were called "odooinstaller"; keep recognising what they created.
+LEGACY_NAME = "odooinstaller"
+LEGACY_MARKERS = (".odooinstaller",)
+
+
+def migrate_legacy_state(layout: Layout) -> bool:
+    """Move a pre-rename instance list (~/.local/share/odooinstaller) to its new place, once."""
+    legacy = layout.state_dir.parent / LEGACY_NAME
+    if layout.state_dir.exists() or not legacy.is_dir():
+        return False
+    try:
+        legacy.rename(layout.state_dir)
+    except OSError:
+        return False
+    return True
 
 
 class RegistryError(RuntimeError):
@@ -22,6 +37,7 @@ class Registry:
 
     def __init__(self, layout: Layout) -> None:
         self.layout = layout
+        migrate_legacy_state(layout)
 
     def _load(self, mode: Mode) -> dict[str, Instance]:
         path = self.layout.registry_path(mode)
@@ -41,7 +57,7 @@ class Registry:
         payload = {"version": 1, "instances": {n: i.to_dict() for n, i in sorted(instances.items())}}
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-        # The server registry holds no secrets; keep it readable so `odooinstaller list`
+        # The server registry holds no secrets; keep it readable so `odoobuddy list`
         # works without sudo. Local registries stay private to the user.
         tmp.chmod(0o644 if mode == "server" else 0o600)
         os.replace(tmp, path)
@@ -69,7 +85,7 @@ class Registry:
         if self.current() == name:
             self.set_current(None)
 
-    # --- the "current" instance, chosen with `odooinstaller use NAME` ---
+    # --- the "current" instance, chosen with `odoobuddy use NAME` ---
 
     def _state_path(self) -> Path:
         return self.layout.state_dir / "state.json"
@@ -91,12 +107,13 @@ class Registry:
 def instance_from_cwd(cwd: Path) -> str | None:
     """If we are inside an instance folder, return its name (read from the marker file)."""
     for folder in (cwd, *cwd.parents):
-        marker = folder / MARKER_FILE
-        if marker.is_file():
-            try:
-                return marker.read_text(encoding="utf-8").strip() or None
-            except OSError:
-                return None
+        for marker_name in (MARKER_FILE, *LEGACY_MARKERS):
+            marker = folder / marker_name
+            if marker.is_file():
+                try:
+                    return marker.read_text(encoding="utf-8").strip() or None
+                except OSError:
+                    return None
     return None
 
 
@@ -110,7 +127,7 @@ def resolve(
     """Pick the instance a command applies to: explicit name > folder > `use` > ask."""
     instances = registry.all()
     if not instances:
-        raise RegistryError("no instances yet, create one with: odooinstaller install")
+        raise RegistryError("no instances yet, create one with: odoobuddy install")
     for candidate, source in (
         (name, "argument"),
         (instance_from_cwd(cwd), "folder"),
@@ -125,6 +142,6 @@ def resolve(
             raise RegistryError(f"no instance named {candidate!r}. Known instances: {known}")
     if choose is None:
         raise RegistryError(
-            "which instance? Pass a name, run inside its folder, or set one with: odooinstaller use NAME"
+            "which instance? Pass a name, run inside its folder, or set one with: odoobuddy use NAME"
         )
     return choose(sorted(instances.values(), key=lambda i: i.name))

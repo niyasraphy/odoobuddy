@@ -1,17 +1,17 @@
 import pytest
 from typer.testing import CliRunner
 
-from odooinstaller import __version__
-from odooinstaller.cli import app
-from odooinstaller.layout import Layout
-from odooinstaller.registry import Registry
+from odoobuddy import __version__
+from odoobuddy.cli import app
+from odoobuddy.layout import Layout
+from odoobuddy.registry import Registry
 
 runner = CliRunner()
 
 
 @pytest.fixture(autouse=True)
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("ODOOINSTALLER_ROOT", str(tmp_path))
+    monkeypatch.setenv("ODOOBUDDY_ROOT", str(tmp_path))
     monkeypatch.setenv("COLUMNS", "200")
     monkeypatch.chdir(tmp_path)
     return Registry(Layout.under(tmp_path))
@@ -93,13 +93,13 @@ def test_no_command_starts_the_wizard(monkeypatch):
 
     def fake_wizard(prompter, ctx):
         seen["preset"] = ctx.preset
-        from odooinstaller.wizard import WizardAbort
+        from odoobuddy.wizard import WizardAbort
 
         raise WizardAbort("stop here")
 
-    monkeypatch.setattr("odooinstaller.cli.run_wizard", fake_wizard)
+    monkeypatch.setattr("odoobuddy.cli.run_wizard", fake_wizard)
     # With an empty list, click falls back to sys.argv (pytest's own arguments).
-    monkeypatch.setattr("sys.argv", ["odooinstaller"])
+    monkeypatch.setattr("sys.argv", ["odoobuddy"])
     result = runner.invoke(app, [])
     assert "stop here" in result.output
     assert seen["preset"] == {}  # nothing pre-answered

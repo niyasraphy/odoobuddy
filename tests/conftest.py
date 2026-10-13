@@ -8,10 +8,10 @@ from typing import Any
 import pytest
 from rich.console import Console
 
-from odooinstaller.layout import Layout
-from odooinstaller.models import Instance, db_role_for
-from odooinstaller.registry import Registry
-from odooinstaller.system import Runner
+from odoobuddy.layout import Layout
+from odoobuddy.models import Instance, db_role_for
+from odoobuddy.registry import Registry
+from odoobuddy.system import Runner
 
 
 class RecordingRunner(Runner):
@@ -44,7 +44,7 @@ class RecordingRunner(Runner):
         if self.on_run:
             self.on_run(full)
         if self.fail_on and " ".join(full).startswith(self.fail_on):
-            from odooinstaller.system import CommandError
+            from odoobuddy.system import CommandError
 
             raise CommandError(full, 1, "simulated failure")
         line = " ".join(full)

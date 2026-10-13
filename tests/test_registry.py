@@ -1,6 +1,6 @@
 import pytest
 
-from odooinstaller.registry import MARKER_FILE, RegistryError, instance_from_cwd, resolve
+from odoobuddy.registry import MARKER_FILE, RegistryError, instance_from_cwd, resolve
 
 
 def test_add_get_remove_and_current(registry, make_instance):
@@ -85,3 +85,18 @@ def test_resolve_with_no_instances(registry, tmp_path):
 def test_stale_current_is_ignored(three, tmp_path):
     three.set_current("deleted-one")
     assert resolve(three, None, cwd=tmp_path, choose=lambda items: items[0]).name == "crm"
+
+
+def test_legacy_state_and_marker_are_migrated(layout, tmp_path):
+    from odoobuddy.registry import Registry
+
+    legacy = layout.state_dir.parent / "odooinstaller"
+    legacy.mkdir(parents=True)
+    (legacy / "instances.json").write_text('{"version": 1, "instances": {}}')
+    Registry(layout)
+    assert (layout.state_dir / "instances.json").exists() and not legacy.exists()
+
+    folder = tmp_path / "old-instance"
+    folder.mkdir()
+    (folder / ".odooinstaller").write_text("old-instance\n")
+    assert instance_from_cwd(folder) == "old-instance"

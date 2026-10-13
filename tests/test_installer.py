@@ -2,10 +2,10 @@ import json
 
 import pytest
 
-from odooinstaller import installer as installer_mod
-from odooinstaller.installer import Installer
-from odooinstaller.models import InstallSpec
-from odooinstaller.registry import MARKER_FILE
+from odoobuddy import installer as installer_mod
+from odoobuddy.installer import Installer
+from odoobuddy.models import InstallSpec
+from odoobuddy.registry import MARKER_FILE
 
 from .conftest import RecordingRunner
 
@@ -146,7 +146,7 @@ def test_clone_is_shallow_single_branch(layout, registry):
 
 
 def test_rerun_skips_complete_clone(layout, registry, monkeypatch):
-    from odooinstaller import sources
+    from odoobuddy import sources
 
     spec = InstallSpec(name="shop", version="18.0", mode="local")
     runner = RecordingRunner()
@@ -174,7 +174,7 @@ def test_failed_check_still_drops_test_database(layout, registry):
     runner = RecordingRunner(fail_on=str(layout.local_home / "shop" / "venv" / "bin" / "python"))
     inst = Installer(spec, layout=layout, registry=registry, runner=runner)
     inst.write_config()
-    from odooinstaller.system import CommandError
+    from odoobuddy.system import CommandError
 
     with pytest.raises(CommandError):
         inst.test_installation()
@@ -205,7 +205,7 @@ def test_layout_keeps_everything_in_the_instance_folder(layout, registry):
 
 
 def test_custom_repos_are_cloned_and_their_requirements_installed(layout, registry):
-    from odooinstaller.models import RepoSpec
+    from odoobuddy.models import RepoSpec
 
     spec = InstallSpec(
         name="shop",

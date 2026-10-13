@@ -49,14 +49,35 @@ def _local_pid(instance: Instance) -> int | None:
     try:
         pid = int(instance.pid_file.read_text().strip())
     except (OSError, ValueError):
-        return None
+        return _find_odoo_process(instance)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
-        return None
+        return _find_odoo_process(instance)
     except PermissionError:
         return pid
     return pid
+
+
+def _find_odoo_process(instance: Instance, proc: Path = Path("/proc")) -> int | None:
+    """Find the instance's Odoo by its config file, e.g. when started from an IDE or when the
+    pid file was deleted, so status/stop never report "stopped" for a running server."""
+    config = str(instance.config_path)
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return None
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            args = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        text = [a.decode(errors="replace") for a in args]
+        if any(a.endswith("odoo-bin") for a in text) and config in text and "shell" not in text:
+            return int(entry.name)
+    return None
 
 
 def status(instance: Instance) -> str:
@@ -239,7 +260,7 @@ def update(
 
 def default_backup_dir(instance: Instance) -> Path:
     if instance.mode == "server":
-        return Path("/var/backups/odooinstaller") / instance.name
+        return Path("/var/backups/odoobuddy") / instance.name
     return instance.instance_dir / "backups"
 
 
@@ -252,7 +273,7 @@ def backup(runner: Runner, instance: Instance, db: str, dest_dir: Path) -> Path:
         return target
     dest_dir.mkdir(parents=True, exist_ok=True)
     settings = postgres.read_db_settings(instance.config_path)
-    with tempfile.TemporaryDirectory(prefix="odooinstaller-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="odoobuddy-") as tmp:
         dump = Path(tmp) / "dump.sql"
         runner.run(
             ["pg_dump", "--no-owner", "--format=plain", "--file", str(dump), db],
@@ -263,7 +284,7 @@ def backup(runner: Runner, instance: Instance, db: str, dest_dir: Path) -> Path:
             "db_name": db,
             "version": instance.version,
             "major_version": instance.version,
-            "created_by": "odooinstaller",
+            "created_by": "odoobuddy",
         }
         filestore = instance.data_dir / "filestore" / db
         with zipfile.ZipFile(target, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -293,7 +314,7 @@ def restore(runner: Runner, instance: Instance, archive: Path, db: str) -> None:
     settings = postgres.read_db_settings(instance.config_path)
     env = postgres.client_env(settings)
     filestore = instance.data_dir / "filestore" / db
-    with tempfile.TemporaryDirectory(prefix="odooinstaller-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="odoobuddy-") as tmp:
         with zipfile.ZipFile(archive) as zf:
             zf.extractall(tmp)
         runner.run(["dropdb", "--if-exists", "--force", db], env=env)
@@ -373,7 +394,7 @@ def doctor(registry: Registry) -> list[Check]:
     for tool, fix in (
         ("git", "sudo apt install git"),
         ("psql", "sudo apt install postgresql"),
-        ("wkhtmltopdf", "re-run odooinstaller install, or see the README"),
+        ("wkhtmltopdf", "re-run odoobuddy install, or see the README"),
     ):
         found = command_exists(tool)
         checks.append(Check(found, "system", f"{tool} {'found' if found else 'not found'}", fix))
@@ -406,7 +427,7 @@ def doctor(registry: Registry) -> list[Check]:
                     exists,
                     inst.name,
                     f"{what} {'ok' if exists else 'missing'} ({path})",
-                    f"re-run: odooinstaller install --name {inst.name}",
+                    f"re-run: odoobuddy install --name {inst.name}",
                 )
             )
         for port in (inst.http_port, inst.gevent_port):

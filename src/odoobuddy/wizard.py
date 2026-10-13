@@ -148,7 +148,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         ),
     )
     if mode == "server" and not ctx.is_root:
-        raise WizardAbort("server mode changes system settings, run it with sudo: sudo odooinstaller install")
+        raise WizardAbort("server mode changes system settings, run it with sudo: sudo odoobuddy install")
 
     # 2. Version
     version = pre.get("version")

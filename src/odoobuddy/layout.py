@@ -26,14 +26,14 @@ class Layout:
 
     @classmethod
     def default(cls) -> Layout:
-        if root := os.environ.get("ODOOINSTALLER_ROOT"):
+        if root := os.environ.get("ODOOBUDDY_ROOT"):
             return cls.under(Path(root))
         data_home = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
         return cls(
-            local_home=Path(os.environ.get("ODOOINSTALLER_HOME", Path.home() / "odoo")),
-            state_dir=data_home / "odooinstaller",
-            server_root=Path("/opt/odooinstaller"),
-            server_etc=Path("/etc/odooinstaller"),
+            local_home=Path(os.environ.get("ODOOBUDDY_HOME", Path.home() / "odoo")),
+            state_dir=data_home / "odoobuddy",
+            server_root=Path("/opt/odoobuddy"),
+            server_etc=Path("/etc/odoobuddy"),
             server_conf_dir=Path("/etc/odoo"),
             server_log_dir=Path("/var/log/odoo"),
             server_data_dir=Path("/var/lib/odoo"),
@@ -47,9 +47,9 @@ class Layout:
         """A layout rooted in ``root`` (used by tests and --root)."""
         return cls(
             local_home=root / "home" / "odoo",
-            state_dir=root / "home" / ".local" / "share" / "odooinstaller",
-            server_root=root / "opt" / "odooinstaller",
-            server_etc=root / "etc" / "odooinstaller",
+            state_dir=root / "home" / ".local" / "share" / "odoobuddy",
+            server_root=root / "opt" / "odoobuddy",
+            server_etc=root / "etc" / "odoobuddy",
             server_conf_dir=root / "etc" / "odoo",
             server_log_dir=root / "var" / "log" / "odoo",
             server_data_dir=root / "var" / "lib" / "odoo",

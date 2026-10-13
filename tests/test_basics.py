@@ -6,10 +6,10 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from odooinstaller import render, sources, versions
-from odooinstaller.installer import suggested_workers, wkhtmltopdf_url
-from odooinstaller.models import Instance, validate_name
-from odooinstaller.ports import check_port, gevent_port_for, suggest_ports
+from odoobuddy import render, sources, versions
+from odoobuddy.installer import suggested_workers, wkhtmltopdf_url
+from odoobuddy.models import Instance, validate_name
+from odoobuddy.ports import check_port, gevent_port_for, suggest_ports
 
 # ------------------------------------------------------------------ versions
 
@@ -213,7 +213,7 @@ def test_git_auth_env_hides_token_from_url():
 
 
 def test_runner_streams_output_and_logs(tmp_path):
-    from odooinstaller.system import Runner
+    from odoobuddy.system import Runner
 
     seen = []
     runner = Runner(log_file=tmp_path / "x.log", root=False, on_output=seen.append)
@@ -224,7 +224,7 @@ def test_runner_streams_output_and_logs(tmp_path):
 
 
 def test_runner_failure_keeps_tail(tmp_path):
-    from odooinstaller.system import CommandError, Runner
+    from odoobuddy.system import CommandError, Runner
 
     runner = Runner(root=False)
     with pytest.raises(CommandError) as info:
@@ -235,7 +235,7 @@ def test_runner_failure_keeps_tail(tmp_path):
 
 
 def test_runner_never_waits_for_hidden_sudo_prompt():
-    from odooinstaller.system import Runner
+    from odoobuddy.system import Runner
 
     runner = Runner(root=False, sudo_noninteractive=True)
     assert runner._prefix(sudo=True, as_user=None) == ["sudo", "-n"]
@@ -244,7 +244,7 @@ def test_runner_never_waits_for_hidden_sudo_prompt():
 
 
 def test_find_ide(monkeypatch, tmp_path):
-    from odooinstaller import ide
+    from odoobuddy import ide
 
     monkeypatch.setattr(ide.shutil, "which", lambda cmd: "/usr/bin/code" if cmd == "code" else None)
     toolbox = tmp_path / "Toolbox" / "scripts"

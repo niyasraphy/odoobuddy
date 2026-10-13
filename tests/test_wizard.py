@@ -2,8 +2,8 @@ from collections import deque
 
 import pytest
 
-from odooinstaller.sources import AccessResult
-from odooinstaller.wizard import WizardAbort, WizardContext, run_wizard
+from odoobuddy.sources import AccessResult
+from odoobuddy.wizard import WizardAbort, WizardContext, run_wizard
 
 
 class Scripted:
@@ -200,7 +200,7 @@ def test_installed_ide_is_labelled_and_preselected():
 
 
 def test_editing_one_setting_only_asks_that_question():
-    from odooinstaller.wizard import answers_without, editable_fields
+    from odoobuddy.wizard import answers_without, editable_fields
 
     first = run_wizard(Scripted("local", "18.0", "community", "shop", "8069", False, "vscode"), make_ctx())
     labels = dict(editable_fields(first))
@@ -213,7 +213,7 @@ def test_editing_one_setting_only_asks_that_question():
 
 
 def test_switching_to_server_asks_the_server_questions():
-    from odooinstaller.wizard import answers_without
+    from odoobuddy.wizard import answers_without
 
     first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "pycharm"), make_ctx())
     p = Scripted("server", True, "erp.example.com", True, "", "", False)
@@ -223,7 +223,7 @@ def test_switching_to_server_asks_the_server_questions():
 
 
 def test_changing_edition_to_enterprise_asks_for_token():
-    from odooinstaller.wizard import answers_without
+    from odoobuddy.wizard import answers_without
 
     first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "none"), make_ctx())
     edited = run_wizard(Scripted("enterprise", "good"), make_ctx(preset=answers_without(first, "edition")))
@@ -231,7 +231,7 @@ def test_changing_edition_to_enterprise_asks_for_token():
 
 
 def test_server_email_left_empty_is_not_asked_again():
-    from odooinstaller.wizard import answers_without
+    from odoobuddy.wizard import answers_without
 
     p = Scripted(
         "server", "19.0", "community", "prod", "8069", False, True, "erp.example.com", True, "", "", True

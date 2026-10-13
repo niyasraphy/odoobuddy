@@ -1,10 +1,10 @@
-# odooinstaller
+# odoobuddy
 
 **Install and manage many Odoo instances, of any version, on your laptop or on production servers, with one command.**
 
 ```bash
-pip install odooinstaller
-odooinstaller
+pip install odoobuddy
+odoobuddy
 ```
 
 The wizard asks a few questions, then sets up everything:
@@ -36,8 +36,7 @@ a real module (`contacts`) in a temporary database, deletes it, and lets you cre
 own databases in Odoo's database manager, choosing the name, language, country, demo data
 and admin password yourself.
 
-> `odooinstaller` is a community project and is **not affiliated with Odoo S.A.**
-> It is also unrelated to the `odoo-installer` package on PyPI.
+> `odoobuddy` is a community project and is **not affiliated with Odoo S.A.**
 
 ## Features
 
@@ -59,34 +58,34 @@ and admin password yourself.
 ## Requirements
 
 - Linux: **Ubuntu 22.04 / 24.04** or **Debian 12** (others may work, untested)
-- Python 3.10+ to run `odooinstaller` itself
+- Python 3.10+ to run `odoobuddy` itself
 - `sudo` rights (system packages and PostgreSQL); server mode must run as root
 
 ## Managing instances
 
 ```bash
-odooinstaller list                 # all instances, versions, ports and status
-odooinstaller info shop            # paths, ports, database, source code
-odooinstaller use shop             # set the "current" instance
+odoobuddy list                 # all instances, versions, ports and status
+odoobuddy info shop            # paths, ports, database, source code
+odoobuddy use shop             # set the "current" instance
 
-odooinstaller start|stop|restart shop
-odooinstaller logs shop            # follow the log (-n 500 --no-follow also work)
-odooinstaller shell shop           # Odoo shell with `env` (--db to pick a database)
+odoobuddy start|stop|restart shop
+odoobuddy logs shop            # follow the log (-n 500 --no-follow also work)
+odoobuddy shell shop           # Odoo shell with `env` (--db to pick a database)
 
-odooinstaller update shop          # pull latest code + upgrade modules in every database
-odooinstaller backup shop          # database + filestore → zip (Odoo's own format)
-odooinstaller restore backup.zip --name shop --db shop_copy
-odooinstaller remove shop          # asks you to type "shop" to confirm
+odoobuddy update shop          # pull latest code + upgrade modules in every database
+odoobuddy backup shop          # database + filestore → zip (Odoo's own format)
+odoobuddy restore backup.zip --name shop --db shop_copy
+odoobuddy remove shop          # asks you to type "shop" to confirm
 
-odooinstaller doctor               # check the system and every instance
-odooinstaller versions             # Odoo versions available to install
+odoobuddy doctor               # check the system and every instance
+odoobuddy versions             # Odoo versions available to install
 ```
 
 ### Which instance does a command use?
 
-1. The name you type: `odooinstaller logs shop`
+1. The name you type: `odoobuddy logs shop`
 2. Otherwise, the instance folder you are in (`cd ~/odoo/shop/addons/my_module`)
-3. Otherwise, the one chosen with `odooinstaller use shop`
+3. Otherwise, the one chosen with `odoobuddy use shop`
 4. Otherwise, it asks you to pick from a list. It never guesses.
 
 ## Where things go
@@ -94,23 +93,23 @@ odooinstaller versions             # Odoo versions available to install
 Everything about an instance lives in **one folder**:
 
 ```
-~/odoo/testing20/                 (server: /opt/odooinstaller/instances/testing20/)
+~/odoo/testing20/                 (server: /opt/odoobuddy/instances/testing20/)
 ├── odoo/
 │   ├── odoo/                     ← Odoo Community (branch 20.0, latest commit only)
 │   └── enterprise/               ← Odoo Enterprise (if chosen)
 ├── custom/
 │   ├── addons/                   ← your own loose modules
-│   ├── web/                      ← cloned repositories (odooinstaller testing20 clone URL)
+│   ├── web/                      ← cloned repositories (odoobuddy testing20 clone URL)
 │   └── my-company-modules/
 ├── conf/
 │   └── odoo.conf                 ← configuration (ports, DB user, addons_path, master password)
 ├── venv/                         ← this instance's own Python
 ├── data/filestore/<db>/          ← attachments of each database   (server: /var/lib/odoo/<name>/)
 ├── logs/odoo.log                 ← log                            (server: /var/log/odoo/<name>.log)
-├── backups/                      ← backup zips                    (server: /var/backups/odooinstaller/<name>/)
+├── backups/                      ← backup zips                    (server: /var/backups/odoobuddy/<name>/)
 ├── start.sh                      ← run in the terminal (local)
 ├── .idea/  or  .vscode/          ← PyCharm or VS Code project (local)
-└── .odooinstaller                ← marks the folder, so commands know which instance you're in
+└── .odoobuddy                ← marks the folder, so commands know which instance you're in
 ```
 
 `addons_path` order: `odoo/enterprise` → `custom/addons` → each cloned repository → Community.
@@ -126,16 +125,16 @@ PostgreSQL user `odoo_<name>`, which can only see its own databases.
 The wizard asks whether to clone repositories during installation. You can also add them later:
 
 ```bash
-odooinstaller testing20 clone https://github.com/OCA/web.git          # branch = Odoo version
-odooinstaller testing20 clone git@github.com:acme/odoo-addons.git 20.0
-odooinstaller testing20 repos                                          # list them
+odoobuddy testing20 clone https://github.com/OCA/web.git          # branch = Odoo version
+odoobuddy testing20 clone git@github.com:acme/odoo-addons.git 20.0
+odoobuddy testing20 repos                                          # list them
 ```
 
 Each repository is cloned into `custom/`, its `requirements.txt` is installed into the
 instance's Python, and `addons_path` in `conf/odoo.conf` is updated; your other edits to
 the file are kept. For private https repositories you are asked for an access token. It is
 used for that clone only and never saved. SSH URLs use your SSH keys.
-`odooinstaller update` also pulls every repository.
+`odoobuddy update` also pulls every repository.
 
 ## Automation (no questions)
 
@@ -143,7 +142,7 @@ Every question has a flag. For example:
 
 ```bash
 export ODOO_GITHUB_TOKEN=ghp_...          # only for Enterprise
-sudo -E odooinstaller install --mode server --version 19.0 --edition enterprise \
+sudo -E odoobuddy install --mode server --version 19.0 --edition enterprise \
     --name shop --port 8069 --domain erp.example.com --ssl \
     --email admin@example.com --workers 5 --firewall \
     --repo https://github.com/OCA/web.git --repo git@github.com:acme/addons.git#19.0 --yes

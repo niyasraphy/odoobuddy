@@ -1,4 +1,4 @@
-"""The `odooinstaller` command."""
+"""The `odoobuddy` command."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ def _fail(message: str, code: int = 1) -> typer.Exit:
 
 def _choose(instances: list[Instance]) -> Instance:
     if not sys.stdin.isatty():
-        raise RegistryError("which instance? pass its name, e.g. odooinstaller start shop")
+        raise RegistryError("which instance? pass its name, e.g. odoobuddy start shop")
     statuses = {i.name: operations.status(i) for i in instances}
     choices = [
         (i.name, f"{i.name:<14} {i.version:<6} {i.edition.title():<11} {i.mode:<7} {statuses[i.name]}")
@@ -114,7 +114,7 @@ def _database(instance: Instance, db: Optional[str]) -> str:
 
 def _require_root_for(instance: Instance, action: str) -> None:
     if instance.mode == "server" and not is_root():
-        raise _fail(f"{action} a server instance needs root: sudo odooinstaller {' '.join(sys.argv[1:])}")
+        raise _fail(f"{action} a server instance needs root: sudo odoobuddy {' '.join(sys.argv[1:])}")
 
 
 def _confirm_by_typing(instance: Instance, warning: str) -> None:
@@ -125,14 +125,14 @@ def _confirm_by_typing(instance: Instance, warning: str) -> None:
 
 
 def _runner(dry_run: bool, log_name: str) -> Runner:
-    log_dir = Path("/var/log/odooinstaller") if is_root() else _layout().state_dir / "logs"
+    log_dir = Path("/var/log/odoobuddy") if is_root() else _layout().state_dir / "logs"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Runner(console=console, dry_run=dry_run, log_file=log_dir / f"{log_name}-{stamp}.log")
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"odooinstaller {__version__}")
+        console.print(f"odoobuddy {__version__}")
         raise typer.Exit()
 
 
@@ -326,7 +326,7 @@ def install(
         body = Group(body, "", help_text.rstrip())
     console.print(Panel(body, title=inst.label, expand=False))
     console.print(
-        f"[dim]Manage it: odooinstaller start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
+        f"[dim]Manage it: odoobuddy start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
     )
 
 
@@ -381,7 +381,7 @@ def list_instances() -> None:
     registry = _registry()
     instances = sorted(registry.all().values(), key=lambda i: i.name)
     if not instances:
-        console.print("No instances yet. Create one with: [bold]odooinstaller install[/]")
+        console.print("No instances yet. Create one with: [bold]odoobuddy install[/]")
         return
     statuses = {i.name: operations.status(i) for i in instances}
     console.print(ui.instances_table(instances, statuses, registry.current()))
@@ -424,7 +424,7 @@ def start(name: Optional[str] = typer.Argument(None, help="Instance name")) -> N
     if ok:
         console.print(f"[green]✓ Running:[/] {inst.url}")
     else:
-        raise _fail(f"Odoo did not answer on port {inst.http_port}. Check: odooinstaller logs {inst.name}")
+        raise _fail(f"Odoo did not answer on port {inst.http_port}. Check: odoobuddy logs {inst.name}")
 
 
 @app.command()
@@ -447,7 +447,7 @@ def restart(name: Optional[str] = typer.Argument(None, help="Instance name")) ->
     with SudoSession(runner):
         ok = _with_status("Restarting…", lambda: operations.restart(runner, inst))
     if not ok:
-        raise _fail(f"Odoo did not come back. Check: odooinstaller logs {inst.name}")
+        raise _fail(f"Odoo did not come back. Check: odoobuddy logs {inst.name}")
     console.print(f"[green]✓ Running:[/] {inst.url}")
 
 
@@ -597,7 +597,7 @@ def clone(
 ) -> None:
     """Clone a custom module repository into custom/ and add it to the addons path.
 
-    Also works as:  odooinstaller INSTANCE clone URL [BRANCH]
+    Also works as:  odoobuddy INSTANCE clone URL [BRANCH]
     """
     inst = _instance(instance_name)
     _require_root_for(inst, "Cloning into")
@@ -659,7 +659,7 @@ def list_repositories(name: Optional[str] = typer.Argument(None, help="Instance 
     ui.banner(inst, f"Custom repositories in {inst.custom_dir}")
     found = repos.list_repos(_runner(False, f"repos-{inst.name}"), inst)
     if not found:
-        console.print(f"None yet. Add one with: odooinstaller {inst.name} clone URL [BRANCH]")
+        console.print(f"None yet. Add one with: odoobuddy {inst.name} clone URL [BRANCH]")
         return
     for repo in found:
         console.print(f"[bold]{repo.name}[/]  {repo.branch}  [dim]{repo.commit}[/]\n  {repo.url}")
@@ -706,7 +706,7 @@ _NAME_OPTION = {"clone": "--instance", "restore": "--name"}
 
 
 def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
-    """Allow ``odooinstaller INSTANCE COMMAND ...`` as well as ``odooinstaller COMMAND INSTANCE``."""
+    """Allow ``odoobuddy INSTANCE COMMAND ...`` as well as ``odoobuddy COMMAND INSTANCE``."""
     if len(args) >= 2 and args[0] in instance_names:
         name, command, rest = args[0], args[1], args[2:]
         if command in _NAME_FIRST:

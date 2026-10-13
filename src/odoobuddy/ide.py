@@ -1,4 +1,4 @@
-"""Finding IDEs that are already installed. odooinstaller never installs or changes them;
+"""Finding IDEs that are already installed. odoobuddy never installs or changes them;
 it only writes project files (.idea/ or .vscode/) into the instance folder."""
 
 from __future__ import annotations

@@ -3,8 +3,8 @@ import zipfile
 
 import pytest
 
-from odooinstaller import operations
-from odooinstaller.registry import MARKER_FILE
+from odoobuddy import operations
+from odoobuddy.registry import MARKER_FILE
 
 from .conftest import RecordingRunner
 
@@ -146,3 +146,17 @@ def test_doctor_reports_port_clash_and_missing_files(registry, make_instance, mo
     messages = [c.message for c in checks if not c.ok]
     assert any("port 8069 also used by a" in m for m in messages)
     assert any("config file missing" in m for m in messages)
+
+
+def test_running_odoo_found_without_pid_file(make_instance, tmp_path):
+    inst = make_instance("shop")
+    proc = tmp_path / "proc"
+    for pid, args in {
+        "100": ["python", "/x/odoo-bin", "-c", str(inst.config_path)],
+        "101": ["python", "/x/odoo-bin", "shell", "-c", str(inst.config_path)],
+        "102": ["python", "/x/odoo-bin", "-c", "/other.conf"],
+        "self": ["x"],
+    }.items():
+        (proc / pid).mkdir(parents=True)
+        (proc / pid / "cmdline").write_bytes("\0".join(args).encode() + b"\0")
+    assert operations._find_odoo_process(inst, proc) == 100

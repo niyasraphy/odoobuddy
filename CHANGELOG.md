@@ -13,7 +13,7 @@
   temporary database, which is then deleted; create your own in the database manager.
 - Installed IDEs (VS Code, PyCharm) are detected and pre-selected; PyCharm gets a full project.
 - Each instance is self-contained: odoo/odoo, odoo/enterprise, custom/, conf/ in one folder.
-- Custom repositories: cloned during install or later with `odooinstaller NAME clone URL [BRANCH]`,
+- Custom repositories: cloned during install or later with `odoobuddy NAME clone URL [BRANCH]`,
   with automatic addons_path and requirements; `repos` lists them, `update` pulls them.
-- `odooinstaller NAME COMMAND` works as well as `odooinstaller COMMAND NAME`.
+- `odoobuddy NAME COMMAND` works as well as `odoobuddy COMMAND NAME`.
 - Commands: list, info, use, start, stop, restart, logs, shell, update, backup, restore, remove, doctor, versions.

@@ -34,7 +34,7 @@ def check_enterprise_access(token: str, *, timeout: float = 15) -> AccessResult:
         headers={
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
-            "User-Agent": "odooinstaller",
+            "User-Agent": "odoobuddy",
         },
     )
     try:

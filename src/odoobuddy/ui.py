@@ -85,11 +85,11 @@ def instance_details(instance: Instance) -> list[tuple[str, str]]:
     server = instance.mode == "server"
     if server:
         runs_as = f"system user {instance.system_user} (service: {instance.service})"
-        log = f"{instance.log_path}  (or: odooinstaller logs {instance.name})"
+        log = f"{instance.log_path}  (or: odoobuddy logs {instance.name})"
     else:
         runs_as = f"your user ({getpass.getuser()})"
         log = (
-            f"{_home(instance.log_path)} when started with `odooinstaller start`; "
+            f"{_home(instance.log_path)} when started with `odoobuddy start`; "
             "the IDE's Run window when started from the IDE"
         )
     rows = [
@@ -117,9 +117,7 @@ def instance_details(instance: Instance) -> list[tuple[str, str]]:
 
 def ide_help(instance: Instance) -> str:
     folder = _home(instance.instance_dir)
-    stop_first = (
-        f"  First stop the background copy (same port): [bold]odooinstaller stop {instance.name}[/]\n"
-    )
+    stop_first = f"  First stop the background copy (same port): [bold]odoobuddy stop {instance.name}[/]\n"
     launcher = find_ide(instance.ide) if instance.ide != "none" else None
     open_cmd = f"  Open it now:  {launcher} {folder}\n" if launcher else ""
     if instance.ide == "pycharm":

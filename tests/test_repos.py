@@ -1,8 +1,8 @@
 import pytest
 
-from odooinstaller import repos, sources
-from odooinstaller.cli import rewrite_args
-from odooinstaller.models import RepoSpec
+from odoobuddy import repos, sources
+from odoobuddy.cli import rewrite_args
+from odoobuddy.models import RepoSpec
 
 from .conftest import RecordingRunner
 from .test_wizard import Scripted, make_ctx
@@ -112,14 +112,14 @@ def test_wizard_collects_repos_and_asks_token_for_private_ones():
     def check(url, branch, token):
         checks.append((url, branch, token))
         if "private" in url:
-            from odooinstaller.sources import AccessResult
+            from odoobuddy.sources import AccessResult
 
             return AccessResult(token == "tok", "access denied", needs_auth=True)
         if "missing" in url:
-            from odooinstaller.sources import AccessResult
+            from odoobuddy.sources import AccessResult
 
             return AccessResult(False, "branch '18.0' does not exist")
-        from odooinstaller.sources import AccessResult
+        from odoobuddy.sources import AccessResult
 
         return AccessResult(True, "ok")
 
@@ -141,7 +141,7 @@ def test_wizard_collects_repos_and_asks_token_for_private_ones():
 
 
 def run(p, ctx):
-    from odooinstaller.wizard import run_wizard
+    from odoobuddy.wizard import run_wizard
 
     return run_wizard(p, ctx)
 
