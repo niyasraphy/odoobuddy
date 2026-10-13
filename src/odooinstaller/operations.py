@@ -171,64 +171,67 @@ def shell_command(instance: Instance, db: str) -> list[str]:
 # ---------------------------------------------------------------- update
 
 
-def instances_sharing_source(registry: Registry, instance: Instance) -> list[Instance]:
-    return sorted(
-        (i for i in registry.all().values() if i.community_dir == instance.community_dir),
-        key=lambda i: i.name,
-    )
-
-
 def update(
     runner: Runner,
-    registry: Registry,
     instance: Instance,
     *,
     github_token: str | None,
     modules: str = "all",
     backup_dir: Path | None = None,
-) -> list[Instance]:
-    """Pull new code for the instance's source and upgrade modules on every instance using it."""
-    affected = instances_sharing_source(registry, instance)
-    for inst in affected:
-        if inst.mode == "server":
-            for db in list_databases(runner, inst):
-                backup(runner, inst, db, backup_dir or default_backup_dir(inst))
+) -> list[str]:
+    """Pull Odoo and custom repositories, then upgrade modules in every database.
+
+    Returns warnings (e.g. a custom repository that could not be pulled).
+    """
+    from . import repos
+
+    warnings: list[str] = []
+    databases = list_databases(runner, instance)
+    if instance.mode == "server":
+        for db in databases:
+            backup(runner, instance, db, backup_dir or default_backup_dir(instance))
     sources.update(runner, instance.community_dir, instance.version)
     if instance.enterprise_dir is not None and (instance.enterprise_dir / ".git").exists():
         if github_token:
             sources.update(
-                runner,
-                instance.enterprise_dir,
-                instance.version,
-                env=sources.git_auth_env(github_token),
+                runner, instance.enterprise_dir, instance.version, env=sources.git_auth_env(github_token)
             )
         else:
-            runner.console.print("  [yellow]Enterprise code skipped (no token given)[/yellow]")
-    uv = find_uv()
-    for inst in affected:
+            warnings.append("Enterprise code not updated (no GitHub token given)")
+    for repo in repos.list_repos(runner, instance):
+        try:
+            repos.pull(runner, repo.path)
+        except CommandError as exc:
+            warnings.append(f"custom repository {repo.name} not updated: {exc.output.splitlines()[-1:]}")
+    requirements = [instance.community_dir / "requirements.txt"]
+    requirements += [
+        r.path / "requirements.txt"
+        for r in repos.list_repos(runner, instance)
+        if (r.path / "requirements.txt").is_file()
+    ]
+    runner.run(
+        [
+            find_uv(),
+            "pip",
+            "install",
+            "--python",
+            str(instance.python_bin),
+            *[arg for req in requirements for arg in ("-r", str(req))],
+        ]
+    )
+    repos.refresh_addons_path(runner, instance)
+    was_running = status(instance) == STATUS_RUNNING
+    if was_running:
+        stop(runner, instance)
+    for db in databases:
         runner.run(
-            [
-                uv,
-                "pip",
-                "install",
-                "--python",
-                str(inst.python_bin),
-                "-r",
-                str(inst.community_dir / "requirements.txt"),
-            ]
+            _odoo(instance, "-d", db, "-u", modules, "--stop-after-init"),
+            as_user=_as_user(instance),
+            cwd=instance.instance_dir,
         )
-        was_running = status(inst) == STATUS_RUNNING
-        if was_running:
-            stop(runner, inst)
-        for db in list_databases(runner, inst):
-            runner.run(
-                _odoo(inst, "-d", db, "-u", modules, "--stop-after-init"),
-                as_user=_as_user(inst),
-                cwd=inst.instance_dir,
-            )
-        if was_running:
-            start(runner, inst)
-    return affected
+    if was_running:
+        start(runner, instance)
+    return warnings
 
 
 # ------------------------------------------------------- backup / restore

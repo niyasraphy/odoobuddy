@@ -16,11 +16,11 @@ from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 
-from . import __version__, operations, sources, ui
+from . import __version__, operations, repos, sources, ui
 from .ide import detect_ides
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
-from .models import Instance
+from .models import Instance, RepoSpec
 from .registry import Registry, RegistryError, resolve
 from .system import (
     CommandError,
@@ -160,13 +160,16 @@ def install(
     email: Optional[str] = typer.Option(None, help="Server only: email for SSL notices"),
     workers: Optional[int] = typer.Option(None, help="Server only: number of Odoo workers"),
     firewall: Optional[bool] = typer.Option(None, "--firewall/--no-firewall", help="Server only: enable ufw"),
-    own_source: bool = typer.Option(False, "--own-source", help="Private copy of the Odoo code"),
     github_token: Optional[str] = typer.Option(
         None,
         envvar="ODOO_GITHUB_TOKEN",
         show_envvar=True,
         help="Token with odoo/enterprise access (prefer the env var over typing it here)",
     ),
+    repo: Optional[list[str]] = typer.Option(
+        None, "--repo", help="Custom repository to clone, as URL or URL#BRANCH (repeatable)"
+    ),
+    no_repos: bool = typer.Option(False, "--no-repos", help="Do not ask about custom repositories"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for final confirmation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen, change nothing"),
 ) -> None:
@@ -198,7 +201,13 @@ def install(
         preset["domain"] = domain
     elif no_domain:
         preset["domain"] = None
-    preset["own_source"] = own_source
+    if repo or no_repos:
+        preset["repos"] = [
+            RepoSpec(url=r.split("#", 1)[0], branch=r.split("#", 1)[1] if "#" in r else (odoo_version or ""))
+            for r in repo or []
+        ]
+        if any(not r.branch for r in preset["repos"]):  # type: ignore[attr-defined]
+            raise _fail("give --version, or a branch with --repo URL#BRANCH")
     for key, allowed in (
         ("edition", {"community", "enterprise"}),
         ("mode", {"local", "server"}),
@@ -218,6 +227,9 @@ def install(
         is_root=is_root() or dry_run,
         suggested_workers=suggested_workers(cpu_count(), memory_mb()),
         installed_ides=detect_ides(),
+        check_repo=lambda url, branch, token: _with_status(
+            "Checking repository…", lambda: sources.check_repo(Runner(console=console), url, branch, token)
+        ),
         preset=preset,
     )
     try:
@@ -453,14 +465,7 @@ def update(
     """Pull the latest Odoo code and upgrade modules (backs up server instances first)."""
     inst = _instance(name)
     _require_root_for(inst, "Updating")
-    registry = _registry()
-    ui.banner(inst, "Update code and modules")
-    affected = operations.instances_sharing_source(registry, inst)
-    if len(affected) > 1:
-        names = ", ".join(i.name for i in affected)
-        console.print(
-            f"[yellow]⚠ The Odoo {inst.version} code is shared by: {names}. All of them will be updated.[/]"
-        )
+    ui.banner(inst, "Update Odoo code, custom repositories and modules")
     if not yes and not dry_run:
         if inst.mode == "server":
             _confirm_by_typing(inst, "This updates a PRODUCTION instance (a backup is made first).")
@@ -475,15 +480,19 @@ def update(
             or None
         )
     runner = _runner(dry_run, f"update-{inst.name}")
+    warnings: list[str] = []
     try:
-        _with_status(
-            "Updating…",
-            lambda: operations.update(runner, registry, inst, github_token=token, modules=modules),
+        _progress(
+            "Updating",
+            lambda: warnings.extend(operations.update(runner, inst, github_token=token, modules=modules)),
+            runner,
         )
     except CommandError as exc:
-        console.print(Panel(exc.output or str(exc), title="update failed", border_style="red"))
+        console.print(Panel(escape(exc.output or str(exc)), title="update failed", border_style="red"))
         raise _fail(f"see the full log: {runner.log_file}") from None
-    console.print(f"[green]✓ Updated:[/] {', '.join(i.name for i in affected)}")
+    for warning in warnings:
+        console.print(f"[yellow]⚠ {escape(warning)}[/]")
+    console.print(f"[green]✓ Updated {inst.name}[/]")
 
 
 @app.command()
@@ -550,6 +559,87 @@ def remove(
 
 
 @app.command()
+def clone(
+    url: str = typer.Argument(..., help="Repository URL (https://... or git@...)"),
+    branch: Optional[str] = typer.Argument(None, help="Branch (default: the instance's Odoo version)"),
+    instance_name: Optional[str] = typer.Option(None, "--instance", "-i", help="Instance name"),
+    folder: Optional[str] = typer.Option(None, "--dir", help="Folder name under custom/"),
+    token: Optional[str] = typer.Option(
+        None, envvar="ODOO_REPO_TOKEN", show_envvar=True, help="Access token for a private https repo"
+    ),
+    restart_now: Optional[bool] = typer.Option(None, "--restart/--no-restart", help="Restart if running"),
+) -> None:
+    """Clone a custom module repository into custom/ and add it to the addons path.
+
+    Also works as:  odooinstaller INSTANCE clone URL [BRANCH]
+    """
+    inst = _instance(instance_name)
+    _require_root_for(inst, "Cloning into")
+    branch = branch or inst.version
+    ui.banner(inst, f"Clone {url} ({branch}) into {inst.custom_dir}")
+    runner = _runner(False, f"clone-{inst.name}")
+    result = _with_status("Checking repository…", lambda: sources.check_repo(runner, url, branch, token))
+    if not result.ok and result.needs_auth and not token and sys.stdin.isatty():
+        console.print(f"[yellow]{result.message}[/]")
+        token = (
+            typer.prompt("Access token (Enter to cancel)", default="", hide_input=True, show_default=False)
+            or None
+        )
+        if token:
+            result = sources.check_repo(runner, url, branch, token)
+    if not result.ok:
+        raise _fail(result.message)
+    cloned: list[Path] = []
+    try:
+        _progress(
+            "Cloning",
+            lambda: cloned.append(repos.clone_repo(runner, inst, url, branch, token=token, folder=folder)),
+            runner,
+        )
+        path = cloned[0]
+        if (
+            _progress(
+                "Installing Python requirements",
+                lambda: repos.install_requirements(runner, inst, path),
+                runner,
+            )
+            and (path / "requirements.txt").is_file()
+        ):
+            console.print("[green]✓[/] Installed the repository's Python requirements")
+    except (CommandError, FileExistsError, ValueError) as exc:
+        raise _fail(f"clone failed: {getattr(exc, 'output', '') or exc}") from None
+    added = repos.module_folders(path)
+    repos.refresh_addons_path(runner, inst)
+    console.print(f"[green]✓ Cloned into[/] {path}")
+    if added:
+        console.print("[green]✓ Added to addons_path:[/] " + ", ".join(str(p) for p in added))
+    else:
+        console.print("[yellow]⚠ No Odoo modules (__manifest__.py) found in this repository yet.[/]")
+    if operations.status(inst) == operations.STATUS_RUNNING:
+        if restart_now is None:
+            restart_now = sys.stdin.isatty() and typer.confirm(
+                "Restart Odoo to load the new addons path?", default=True
+            )
+        if restart_now:
+            with SudoSession(runner):
+                _with_status("Restarting…", lambda: operations.restart(runner, inst))
+            console.print("[green]✓ Restarted[/] — update the Apps list in Odoo to see new modules")
+
+
+@app.command("repos")
+def list_repositories(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+    """List the custom repositories of an instance."""
+    inst = _instance(name)
+    ui.banner(inst, f"Custom repositories in {inst.custom_dir}")
+    found = repos.list_repos(_runner(False, f"repos-{inst.name}"), inst)
+    if not found:
+        console.print(f"None yet. Add one with: odooinstaller {inst.name} clone URL [BRANCH]")
+        return
+    for repo in found:
+        console.print(f"[bold]{repo.name}[/]  {repo.branch}  [dim]{repo.commit}[/]\n  {repo.url}")
+
+
+@app.command()
 def doctor() -> None:
     """Check the system and every instance for problems."""
     problems = 0
@@ -570,3 +660,40 @@ def versions() -> None:
     """List the Odoo versions available to install."""
     for v in _with_status("Reading Odoo versions from GitHub…", available_versions):
         console.print(f"  Odoo {v}")
+
+
+# Commands that take the instance as their first argument, and ones that take --instance.
+_NAME_FIRST = {
+    "info",
+    "use",
+    "start",
+    "stop",
+    "restart",
+    "logs",
+    "shell",
+    "update",
+    "backup",
+    "remove",
+    "repos",
+}
+_NAME_OPTION = {"clone": "--instance", "restore": "--name"}
+
+
+def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
+    """Allow ``odooinstaller INSTANCE COMMAND ...`` as well as ``odooinstaller COMMAND INSTANCE``."""
+    if len(args) >= 2 and args[0] in instance_names:
+        name, command, rest = args[0], args[1], args[2:]
+        if command in _NAME_FIRST:
+            return [command, name, *rest]
+        if command in _NAME_OPTION:
+            return [command, *rest, _NAME_OPTION[command], name]
+    return args
+
+
+def run() -> None:
+    """Console-script entry point."""
+    try:
+        names = set(_registry().all())
+    except RegistryError:
+        names = set()
+    app(args=rewrite_args(sys.argv[1:], names))

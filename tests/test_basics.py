@@ -114,7 +114,7 @@ def test_local_config(make_instance):
     assert "workers = 0" in conf and "dev_mode = reload,xml" in conf
     assert "logfile" not in conf and "proxy_mode" not in conf
     addons = next(line for line in conf.splitlines() if line.startswith("addons_path"))
-    assert str(inst.instance_dir / "addons") in addons
+    assert str(inst.instance_dir / "custom" / "addons") in addons
 
 
 def test_server_config_with_enterprise(make_instance, tmp_path):

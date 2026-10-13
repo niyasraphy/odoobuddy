@@ -12,7 +12,7 @@ from .conftest import RecordingRunner
 @pytest.fixture
 def configured(make_instance):
     inst = make_instance("shop")
-    inst.instance_dir.mkdir(parents=True)
+    inst.config_path.parent.mkdir(parents=True)
     inst.config_path.write_text(
         "[options]\ndb_host = localhost\ndb_port = 5432\ndb_user = odoo_shop\ndb_password = pw\n"
     )
@@ -71,39 +71,24 @@ def test_restore_rejects_non_backups(configured, tmp_path):
         operations.restore(RecordingRunner(), configured, not_zip, "shop")
 
 
-def test_instances_sharing_source(registry, make_instance, layout):
-    registry.add(make_instance("a", version="18.0"))
-    registry.add(make_instance("b", version="18.0", http_port=8169, gevent_port=8172))
-    registry.add(make_instance("c", version="19.0", http_port=8269, gevent_port=8272))
-    registry.add(
-        make_instance(
-            "d",
-            version="18.0",
-            http_port=8369,
-            gevent_port=8372,
-            own_source=True,
-            community_dir=layout.local_home / "d" / "src" / "community",
-        )
-    )
-    shared = operations.instances_sharing_source(registry, registry.get("a"))
-    assert [i.name for i in shared] == ["a", "b"]
-
-
-def test_update_upgrades_every_instance_on_shared_code(registry, make_instance, monkeypatch):
+def test_update_pulls_code_and_repos_and_upgrades_every_database(configured, monkeypatch):
     monkeypatch.setattr(operations, "status", lambda inst: operations.STATUS_STOPPED)
     monkeypatch.setattr(operations, "find_uv", lambda: "uv")
-    dbs = {"a": ["a_main", "a_test"], "b": ["b_main"]}
-    monkeypatch.setattr(operations, "list_databases", lambda runner, inst: dbs[inst.name])
-    registry.add(make_instance("a"))
-    registry.add(make_instance("b", http_port=8169, gevent_port=8172))
+    monkeypatch.setattr(operations, "list_databases", lambda runner, inst: ["main", "test"])
+    repo = configured.custom_dir / "web"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "requirements.txt").write_text("requests\n")
     runner = RecordingRunner()
-    affected = operations.update(runner, registry, registry.get("a"), github_token=None)
+    warnings = operations.update(runner, configured, github_token=None)
     cmds = runner.joined()
-    assert [i.name for i in affected] == ["a", "b"]
+    assert warnings == []
     assert sum("fetch --progress --depth 1 origin 18.0" in c for c in cmds) == 1
     assert any(c.endswith("gc --prune=now --quiet") for c in cmds)
+    assert any(c.endswith(f"-C {repo} pull --ff-only") for c in cmds)
+    assert any(c.startswith("uv pip install") and str(repo / "requirements.txt") in c for c in cmds)
     upgraded = [c.split(" -d ")[1].split()[0] for c in cmds if "-u all --stop-after-init" in c]
-    assert upgraded == ["a_main", "a_test", "b_main"]  # every database of every affected instance
+    assert upgraded == ["main", "test"]
+    assert "addons_path = " in configured.config_path.read_text()
 
 
 def test_remove_local_instance(registry, configured, layout, monkeypatch):

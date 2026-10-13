@@ -58,19 +58,21 @@ class Layout:
             logrotate_dir=root / "etc" / "logrotate.d",
         )
 
-    def sources_root(self, mode: Mode) -> Path:
-        return self.local_home / ".sources" if mode == "local" else self.server_root / "sources"
-
-    def shared_source(self, mode: Mode, version: str, repo: str) -> Path:
-        return self.sources_root(mode) / version / repo
-
     def instance_dir(self, mode: Mode, name: str) -> Path:
         return self.local_home / name if mode == "local" else self.server_root / "instances" / name
 
+    # Inside an instance folder:  odoo/odoo (community), odoo/enterprise, custom/, conf/
+    def community_dir(self, mode: Mode, name: str) -> Path:
+        return self.instance_dir(mode, name) / "odoo" / "odoo"
+
+    def enterprise_dir(self, mode: Mode, name: str) -> Path:
+        return self.instance_dir(mode, name) / "odoo" / "enterprise"
+
+    def custom_dir(self, mode: Mode, name: str) -> Path:
+        return self.instance_dir(mode, name) / "custom"
+
     def config_path(self, mode: Mode, name: str) -> Path:
-        if mode == "local":
-            return self.instance_dir(mode, name) / "odoo.conf"
-        return self.server_conf_dir / f"{name}.conf"
+        return self.instance_dir(mode, name) / "conf" / "odoo.conf"
 
     def log_path(self, mode: Mode, name: str) -> Path:
         if mode == "local":

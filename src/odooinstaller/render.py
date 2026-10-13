@@ -10,10 +10,13 @@ from .models import Instance
 
 
 def addons_path(instance: Instance) -> list[Path]:
+    """Enterprise first (it overrides community), then custom modules, then community."""
+    from .repos import custom_addons_paths
+
     paths = []
     if instance.enterprise_dir is not None:
         paths.append(instance.enterprise_dir)
-    paths.append(instance.instance_dir / "addons")
+    paths += custom_addons_paths(instance.custom_dir)
     paths.append(instance.community_dir / "addons")
     paths.append(instance.community_dir / "odoo" / "addons")
     return paths
@@ -227,7 +230,7 @@ def pycharm_module(instance: Instance) -> str:
 <module type="PYTHON_MODULE" version="4">
   <component name="NewModuleRootManager">
     <content url="file://$MODULE_DIR$/..">
-      <sourceFolder url="file://$MODULE_DIR$/../addons" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/../custom" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/../venv" />
       <excludeFolder url="file://$MODULE_DIR$/../data" />
       <excludeFolder url="file://$MODULE_DIR$/../logs" />

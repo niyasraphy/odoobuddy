@@ -117,12 +117,6 @@ class Installer:
     def _build_instance(self) -> Instance:
         spec, layout = self.spec, self.layout
         instance_dir = layout.instance_dir(spec.mode, spec.name)
-        if spec.own_source:
-            community = instance_dir / "src" / "community"
-            enterprise = instance_dir / "src" / "enterprise"
-        else:
-            community = layout.shared_source(spec.mode, spec.version, "community")
-            enterprise = layout.shared_source(spec.mode, spec.version, "enterprise")
         return Instance(
             name=spec.name,
             version=spec.version,
@@ -137,12 +131,13 @@ class Installer:
             log_path=layout.log_path(spec.mode, spec.name),
             data_dir=layout.data_dir(spec.mode, spec.name),
             venv_dir=instance_dir / "venv",
-            community_dir=community,
-            enterprise_dir=enterprise if spec.edition == "enterprise" else None,
+            community_dir=layout.community_dir(spec.mode, spec.name),
+            enterprise_dir=layout.enterprise_dir(spec.mode, spec.name)
+            if spec.edition == "enterprise"
+            else None,
             domain=spec.domain if spec.mode == "server" else None,
             ssl=spec.ssl and spec.mode == "server" and bool(spec.domain),
             ide=spec.ide if spec.mode == "local" else "none",
-            own_source=spec.own_source,
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 
@@ -159,6 +154,11 @@ class Installer:
         ]
         if inst.enterprise_dir is not None:
             steps.append(Step(f"Download Odoo {inst.version} Enterprise", self.download_enterprise))
+        if self.spec.repos:
+            count = len(self.spec.repos)
+            steps.append(
+                Step(f"Clone {count} custom repositor{'y' if count == 1 else 'ies'}", self.clone_repos)
+            )
         steps.append(Step(f"Create Python {inst.python} environment", self.create_python_env))
         steps.append(Step(f"Create database user {inst.db_user}", self.create_db_role))
         if server:
@@ -227,6 +227,13 @@ class Installer:
         if not inst.python_bin.exists() or self.runner.dry_run:
             self.runner.run([uv, "venv", "--seed", "--python", inst.python, str(inst.venv_dir)], env=env)
         packages = EXTRA_PACKAGES + (LOCAL_DEV_PACKAGES if inst.mode == "local" else [])
+        requirements = [str(inst.community_dir / "requirements.txt")]
+        if inst.custom_dir.is_dir():
+            requirements += [
+                str(p / "requirements.txt")
+                for p in sorted(inst.custom_dir.iterdir())
+                if (p / "requirements.txt").is_file()
+            ]
         self.runner.run(
             [
                 uv,
@@ -234,8 +241,7 @@ class Installer:
                 "install",
                 "--python",
                 str(inst.python_bin),
-                "-r",
-                str(inst.community_dir / "requirements.txt"),
+                *[arg for req in requirements for arg in ("-r", req)],
                 *packages,
             ],
             env=env,
@@ -268,7 +274,8 @@ class Installer:
         server = inst.mode == "server"
         owner = inst.system_user if server else None
         self.runner.mkdir(inst.instance_dir)
-        self.runner.mkdir(inst.instance_dir / "addons")
+        self.runner.mkdir(inst.custom_dir / "addons")
+        self.runner.mkdir(inst.config_path.parent)
         self.runner.mkdir(inst.data_dir, owner=owner, mode=0o750 if server else 0o755)
         self.runner.mkdir(inst.log_path.parent)
         if server:
@@ -295,6 +302,15 @@ class Installer:
 
     def _as_user(self) -> str | None:
         return self.instance.system_user if self.instance.mode == "server" else None
+
+    def clone_repos(self) -> None:
+        from .repos import clone_repo
+
+        for repo in self.spec.repos:
+            try:
+                clone_repo(self.runner, self.instance, repo.url, repo.branch, token=repo.token)
+            except FileExistsError:
+                continue  # already cloned by an earlier, interrupted run
 
     @property
     def check_db(self) -> str:

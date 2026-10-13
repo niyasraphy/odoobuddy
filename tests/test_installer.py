@@ -37,15 +37,16 @@ def test_local_install_writes_files_and_registers(layout, registry):
     instance = registry.get("shop")
     assert instance is not None and registry.current() == "shop"
     folder = layout.local_home / "shop"
-    conf = (folder / "odoo.conf").read_text()
+    conf = (folder / "conf" / "odoo.conf").read_text()
     assert "http_port = 8169" in conf and f"db_password = {inst.credentials.db_password}" in conf
-    assert (folder / "odoo.conf").stat().st_mode & 0o777 == 0o600
+    assert (folder / "conf" / "odoo.conf").stat().st_mode & 0o777 == 0o600
+    assert (folder / "custom" / "addons").is_dir()
     assert (folder / MARKER_FILE).read_text().strip() == "shop"
     assert json.loads((folder / ".vscode" / "launch.json").read_text())
     assert (folder / "start.sh").stat().st_mode & 0o100
 
     cmds = runner.joined()
-    assert any("git clone" in c and "--branch 18.0" in c and ".sources/18.0/community" in c for c in cmds)
+    assert any("git clone" in c and "--branch 18.0" in c and "shop/odoo/odoo" in c for c in cmds)
     assert any("uv venv --seed --python 3.12" in c for c in cmds)
     assert any(c.startswith("sudo -u postgres") and "psql" in c for c in cmds)
     # the setup is proven on a throw-away database, which is then deleted
@@ -111,7 +112,7 @@ def test_server_install(layout, registry, monkeypatch):
     assert (layout.systemd_dir / "odoo-prod.service").exists()
     assert (layout.nginx_dir / "sites-available" / "odoo-prod.conf").exists()
     assert (layout.logrotate_dir / "odoo-prod").exists()
-    conf = (layout.server_conf_dir / "prod.conf").read_text()
+    conf = (layout.server_root / "instances" / "prod" / "conf" / "odoo.conf").read_text()
     assert "workers = 4" in conf and "proxy_mode = True" in conf
     assert registry.get("prod").url == "https://erp.example.com"
 
@@ -132,12 +133,6 @@ def test_server_without_domain_opens_port(layout, registry):
     assert not any("Nginx" in t or "SSL" in t for t in titles(inst))
     inst.configure_firewall()
     assert "ufw allow 8069/tcp" in runner.joined()
-
-
-def test_own_source_uses_private_folder(layout, registry):
-    spec = InstallSpec(name="patched", version="18.0", mode="local", own_source=True)
-    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner())
-    assert inst.instance.community_dir == layout.local_home / "patched" / "src" / "community"
 
 
 def test_clone_is_shallow_single_branch(layout, registry):
@@ -197,3 +192,38 @@ def test_pycharm_project_files(layout, registry):
     (idea / "misc.xml").write_text("user changed")
     inst.configure_ide()
     assert (idea / "misc.xml").read_text() == "user changed"  # never overwritten
+
+
+def test_layout_keeps_everything_in_the_instance_folder(layout, registry):
+    spec = InstallSpec(name="t20", version="20.0", mode="local", edition="enterprise", github_token="x")
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner()).instance
+    base = layout.local_home / "t20"
+    assert inst.community_dir == base / "odoo" / "odoo"
+    assert inst.enterprise_dir == base / "odoo" / "enterprise"
+    assert inst.custom_dir == base / "custom"
+    assert inst.config_path == base / "conf" / "odoo.conf"
+
+
+def test_custom_repos_are_cloned_and_their_requirements_installed(layout, registry):
+    from odooinstaller.models import RepoSpec
+
+    spec = InstallSpec(
+        name="shop",
+        version="18.0",
+        mode="local",
+        repos=[RepoSpec("https://github.com/OCA/web.git", "18.0", token="tok")],
+    )
+    runner = RecordingRunner()
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    assert "Clone 1 custom repository" in titles(inst)
+    inst.clone_repos()
+    (cmd,), (env,) = runner.commands, runner.envs
+    assert cmd[:2] == ["git", "clone"] and cmd[-1].endswith("shop/custom/web")
+    assert "tok" not in " ".join(cmd) and "GIT_CONFIG_VALUE_0" in env
+    (inst.instance.custom_dir / "web" / "requirements.txt").parent.mkdir(parents=True, exist_ok=True)
+    (inst.instance.custom_dir / "web" / "requirements.txt").write_text("x\n")
+    runner.commands.clear()
+    inst.create_python_env()
+    assert any(
+        str(inst.instance.custom_dir / "web" / "requirements.txt") in " ".join(c) for c in runner.commands
+    )

@@ -89,59 +89,53 @@ odooinstaller versions             # Odoo versions available to install
 3. Otherwise, the one chosen with `odooinstaller use shop`
 4. Otherwise, it asks you to pick from a list. It never guesses.
 
-### Shared source code
-
-Odoo's code is downloaded **once per version** and shared by all instances of that version, which saves gigabytes. `update` warns you and upgrades every instance that shares the code. To give an instance its own copy, for example to test a patch, install it with `--own-source`.
-
 ## Where things go
 
-### Local (your computer)
+Everything about an instance lives in **one folder**:
 
 ```
-~/odoo/
-├── .sources/                     ← Odoo code, downloaded once per version, shared
-│   ├── 19.0/
-│   │   ├── community/            ← odoo/odoo, branch 19.0 (only the latest commit)
-│   │   └── enterprise/           ← odoo/enterprise (only if you chose Enterprise)
-│   └── 20.0/
-│       └── community/
-│
-├── shop/                         ← one folder per instance
-│   ├── addons/                   ← YOUR custom modules go here (already in addons_path)
-│   ├── odoo.conf                 ← configuration (ports, DB user, addons_path, master password)
-│   ├── venv/                     ← this instance's own Python
-│   ├── data/filestore/<db>/      ← attachments of each database
-│   ├── logs/odoo.log             ← log when started with `odooinstaller start`
-│   ├── backups/                  ← `odooinstaller backup` zips
-│   ├── start.sh                  ← run in the terminal
-│   ├── .idea/  or  .vscode/      ← IDE project (PyCharm or VS Code)
-│   └── .odooinstaller            ← marks the folder, so commands know which instance you're in
-│
-└── test20/                       ← another instance, same layout
+~/odoo/testing20/                 (server: /opt/odooinstaller/instances/testing20/)
+├── odoo/
+│   ├── odoo/                     ← Odoo Community (branch 20.0, latest commit only)
+│   └── enterprise/               ← Odoo Enterprise (if chosen)
+├── custom/
+│   ├── addons/                   ← your own loose modules
+│   ├── web/                      ← cloned repositories (odooinstaller testing20 clone URL)
+│   └── my-company-modules/
+├── conf/
+│   └── odoo.conf                 ← configuration (ports, DB user, addons_path, master password)
+├── venv/                         ← this instance's own Python
+├── data/filestore/<db>/          ← attachments of each database   (server: /var/lib/odoo/<name>/)
+├── logs/odoo.log                 ← log                            (server: /var/log/odoo/<name>.log)
+├── backups/                      ← backup zips                    (server: /var/backups/odooinstaller/<name>/)
+├── start.sh                      ← run in the terminal (local)
+├── .idea/  or  .vscode/          ← PyCharm or VS Code project (local)
+└── .odooinstaller                ← marks the folder, so commands know which instance you're in
 ```
 
-`addons_path` order: Enterprise → your `addons/` → Community `addons/` → Community `odoo/addons/`.
-With `--own-source`, the code lives in `~/odoo/<name>/src/community` (and `src/enterprise`) instead.
+`addons_path` order: `odoo/enterprise` → `custom/addons` → each cloned repository → Community.
+Repositories are scanned for modules, so both OCA-style repos (modules at the root) and
+repos with an `addons/` subfolder work.
 
-### Server (production)
+On servers, each instance also has a system user `odoo-<name>`, a service `odoo-<name>.service`
+and, with a domain, `/etc/nginx/sites-available/odoo-<name>.conf`. Every instance has its own
+PostgreSQL user `odoo_<name>`, which can only see its own databases.
 
-```
-/opt/odooinstaller/
-├── sources/<version>/community/  ← shared Odoo code (enterprise/ next to it)
-├── instances/<name>/addons/      ← YOUR custom modules
-├── instances/<name>/venv/        ← Python
-└── python/                       ← Python versions used by the instances
+## Custom module repositories
 
-/etc/odoo/<name>.conf             ← configuration
-/var/lib/odoo/<name>/filestore/   ← attachments
-/var/log/odoo/<name>.log          ← log (rotated weekly)
-/var/backups/odooinstaller/<name>/← backups
-/etc/systemd/system/odoo-<name>.service
-/etc/nginx/sites-available/odoo-<name>.conf
+The wizard asks whether to clone repositories during installation. You can also add them later:
+
+```bash
+odooinstaller testing20 clone https://github.com/OCA/web.git          # branch = Odoo version
+odooinstaller testing20 clone git@github.com:acme/odoo-addons.git 20.0
+odooinstaller testing20 repos                                          # list them
 ```
 
-Each server instance runs as its own system user `odoo-<name>`, and every instance has its
-own PostgreSQL user `odoo_<name>` (it can only see its own databases).
+Each repository is cloned into `custom/`, its `requirements.txt` is installed into the
+instance's Python, and `addons_path` in `conf/odoo.conf` is updated; your other edits to
+the file are kept. For private https repositories you are asked for an access token. It is
+used for that clone only and never saved. SSH URLs use your SSH keys.
+`odooinstaller update` also pulls every repository.
 
 ## Automation (no questions)
 
@@ -151,7 +145,8 @@ Every question has a flag. For example:
 export ODOO_GITHUB_TOKEN=ghp_...          # only for Enterprise
 sudo -E odooinstaller install --mode server --version 19.0 --edition enterprise \
     --name shop --port 8069 --domain erp.example.com --ssl \
-    --email admin@example.com --workers 5 --firewall --yes
+    --email admin@example.com --workers 5 --firewall \
+    --repo https://github.com/OCA/web.git --repo git@github.com:acme/addons.git#19.0 --yes
 ```
 
 Add `--dry-run` to see every command without running anything.

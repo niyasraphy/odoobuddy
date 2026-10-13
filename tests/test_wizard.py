@@ -59,7 +59,7 @@ def make_ctx(**overrides):
 
 
 def test_local_community_flow():
-    p = Scripted("local", "18.0", "community", "", "", "vscode")
+    p = Scripted("local", "18.0", "community", "", "", False, "vscode")
     spec = run_wizard(p, make_ctx())
     assert (spec.mode, spec.version, spec.edition, spec.name) == ("local", "18.0", "community", "odoo18")
     assert (spec.http_port, spec.gevent_port, spec.ide) == (8069, 8072, "vscode")
@@ -69,26 +69,26 @@ def test_local_community_flow():
 
 def test_second_instance_gets_next_free_ports_and_name(make_instance):
     existing = make_instance("odoo18")
-    p = Scripted("local", "18.0", "community", "", "", "none")
+    p = Scripted("local", "18.0", "community", "", "", False, "none")
     spec = run_wizard(p, make_ctx(instances={"odoo18": existing}))
     assert spec.name == "odoo18-2"
     assert (spec.http_port, spec.gevent_port) == (8169, 8172)
 
 
 def test_enterprise_with_valid_token():
-    p = Scripted("local", "19.0", "enterprise", "good", "shop", "8069", "pycharm")
+    p = Scripted("local", "19.0", "enterprise", "good", "shop", "8069", False, "pycharm")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "enterprise" and spec.github_token == "good"
 
 
 def test_enterprise_retry_then_success():
-    p = Scripted("local", "19.0", "enterprise", "bad", True, "good", "shop", "8069", "none")
+    p = Scripted("local", "19.0", "enterprise", "bad", True, "good", "shop", "8069", False, "none")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "enterprise"
 
 
 def test_enterprise_failure_falls_back_to_community():
-    p = Scripted("local", "19.0", "enterprise", "bad", False, "shop", "8069", "none")
+    p = Scripted("local", "19.0", "enterprise", "bad", False, "shop", "8069", False, "none")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "community" and spec.github_token is None
     assert any("Continuing with Community" in s for s in p.said)
@@ -106,6 +106,7 @@ def test_server_with_domain_and_ssl():
         "community",
         "prod",
         "8069",
+        False,
         True,
         "ERP.Example.com",
         True,
@@ -121,14 +122,16 @@ def test_server_with_domain_and_ssl():
 
 
 def test_server_dns_mismatch_warns_and_defaults_ssl_off():
-    p = Scripted("server", "19.0", "community", "prod", "8069", True, "erp.example.com", False, "3", False)
+    p = Scripted(
+        "server", "19.0", "community", "prod", "8069", False, True, "erp.example.com", False, "3", False
+    )
     spec = run_wizard(p, make_ctx(is_root=True, public_ip=lambda: "9.9.9.9"))
     assert not spec.ssl and spec.workers == 3 and not spec.firewall
     assert any("SSL will fail" in s for s in p.said)
 
 
 def test_server_without_domain():
-    p = Scripted("server", "18.0", "community", "prod", "8069", False, "", True)
+    p = Scripted("server", "18.0", "community", "prod", "8069", False, False, "", True)
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain is None and not spec.ssl
     assert any("SERVER-IP:8069" in s for s in p.said)
@@ -143,6 +146,7 @@ def test_presets_skip_questions():
             "name": "x",
             "http_port": 9000,
             "ide": "none",
+            "repos": [],
         }
     )
     p = Scripted()
@@ -185,7 +189,7 @@ def test_installed_ide_is_labelled_and_preselected():
                 seen["choices"], seen["default"] = dict(choices), default
             return super().select(message, choices, default)
 
-    p = Recorder("local", "18.0", "community", "", "", "pycharm")
+    p = Recorder("local", "18.0", "community", "", "", False, "pycharm")
     ctx = make_ctx(installed_ides={"vscode": None, "pycharm": "/snap/bin/pycharm-community"})
     spec = run_wizard(p, ctx)
     assert spec.ide == "pycharm"

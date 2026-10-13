@@ -1,3 +1,3 @@
-from .cli import app
+from .cli import run
 
-app()
+run()

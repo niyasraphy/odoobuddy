@@ -9,7 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
-from .models import Edition, Ide, InstallSpec, Instance, Mode, validate_name
+from .models import Edition, Ide, InstallSpec, Instance, Mode, RepoSpec, validate_name
 from .ports import check_port, gevent_port_for, suggest_ports
 from .sources import AccessResult
 from .versions import major
@@ -103,6 +103,10 @@ class WizardContext:
     resolve_domain: Callable[[str], set[str]] = resolve_domain
     public_ip: Callable[[], str | None] = public_ip
     preset: dict[str, Any] = field(default_factory=dict)
+    # (url, branch, token) -> can we clone it? Used to check custom repositories up front.
+    check_repo: Callable[[str, str, str | None], AccessResult] = lambda url, branch, token: AccessResult(
+        True, "not checked"
+    )
     # IDE -> launcher command (None when not installed), used to label and pre-select choices.
     installed_ides: dict[str, str | None] = field(default_factory=dict)
 
@@ -227,8 +231,9 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         http_port=int(http_port),
         gevent_port=gevent_port,
         github_token=token,
-        own_source=bool(pre.get("own_source", False)),
     )
+
+    spec.repos = pre["repos"] if "repos" in pre else _repo_questions(p, ctx, version)
 
     if mode == "local":
         installed = ctx.installed_ides
@@ -326,3 +331,28 @@ def _check_dns(p: Prompter, ctx: WizardContext, domain: str) -> bool:
         return False
     p.say(f"[green]✓ {domain} points to this server[/green]")
     return True
+
+
+def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoSpec]:
+    """Optionally collect custom module repositories to clone into custom/."""
+    repos: list[RepoSpec] = []
+    if not p.confirm("Clone custom module repositories now? (you can also add them later)", default=False):
+        return repos
+    p.say("[dim]Enter one repository at a time; leave the URL empty to finish.[/dim]")
+    while True:
+        url = p.text("Repository URL (https://... or git@...):")
+        if not url:
+            return repos
+        branch = p.text("Branch:", default=version)
+        token: str | None = None
+        result = ctx.check_repo(url, branch, None)
+        if not result.ok and result.needs_auth:
+            p.say(f"[yellow]{result.message}[/yellow]")
+            token = p.password("Access token for this repository (Enter to skip it):") or None
+            if token:
+                result = ctx.check_repo(url, branch, token)
+        if result.ok:
+            p.say(f"[green]✓ {url} ({branch}) will be cloned[/green]")
+            repos.append(RepoSpec(url=url, branch=branch, token=token))
+        else:
+            p.say(f"[red]✗ skipped {url}: {result.message}[/red]")

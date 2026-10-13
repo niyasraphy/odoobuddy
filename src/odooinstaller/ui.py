@@ -63,8 +63,8 @@ def summary(spec: InstallSpec) -> Panel:
             ("Workers", str(spec.workers)),
             ("Firewall", "enable (SSH + web only)" if spec.firewall else "leave unchanged"),
         ]
-    if spec.own_source:
-        rows.append(("Source code", "private copy for this instance"))
+    if spec.repos:
+        rows.append(("Custom repos", "\n".join(f"{r.url} ({r.branch})" for r in spec.repos)))
     table = Table.grid(padding=(0, 2))
     for key, value in rows:
         table.add_row(f"[bold]{key}[/]", value)
@@ -103,8 +103,11 @@ def instance_details(instance: Instance) -> list[tuple[str, str]]:
         ("Folder", _home(instance.instance_dir)),
         ("Config file", _home(instance.config_path)),
         ("Log", log),
-        ("Your modules", f"{_home(instance.instance_dir / 'addons')}  (already in addons_path)"),
-        ("Odoo code", _home(instance.community_dir) + ("" if instance.own_source else "  (shared)")),
+        (
+            "Custom modules",
+            f"{_home(instance.custom_dir / 'addons')}  (+ repos cloned into {_home(instance.custom_dir)})",
+        ),
+        ("Odoo code", _home(instance.community_dir)),
     ]
     if instance.enterprise_dir is not None:
         rows.append(("Enterprise code", _home(instance.enterprise_dir)))

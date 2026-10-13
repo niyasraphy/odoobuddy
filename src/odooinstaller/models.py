@@ -34,6 +34,15 @@ def service_name_for(name: str) -> str:
 
 
 @dataclass
+class RepoSpec:
+    """A custom-module repository to clone into the instance's custom/ folder."""
+
+    url: str
+    branch: str
+    token: str | None = field(default=None, repr=False)
+
+
+@dataclass
 class InstallSpec:
     """Everything the user chose in the wizard (or passed as flags)."""
 
@@ -49,7 +58,7 @@ class InstallSpec:
     email: str | None = None
     workers: int = 0
     firewall: bool = False
-    own_source: bool = False
+    repos: list[RepoSpec] = field(default_factory=list)
     github_token: str | None = field(default=None, repr=False)
 
 
@@ -75,12 +84,15 @@ class Instance:
     domain: str | None = None
     ssl: bool = False
     ide: Ide = "none"
-    own_source: bool = False
     created_at: str = ""
 
     @property
     def odoo_bin(self) -> Path:
         return self.community_dir / "odoo-bin"
+
+    @property
+    def custom_dir(self) -> Path:
+        return self.instance_dir / "custom"
 
     @property
     def python_bin(self) -> Path:

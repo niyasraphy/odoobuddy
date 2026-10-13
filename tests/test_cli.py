@@ -74,6 +74,7 @@ def test_install_dry_run_changes_nothing(tmp_path, monkeypatch):
             "18069",
             "--ide",
             "none",
+            "--no-repos",
             "--dry-run",
         ],
     )
@@ -101,4 +102,4 @@ def test_no_command_starts_the_wizard(monkeypatch):
     monkeypatch.setattr("sys.argv", ["odooinstaller"])
     result = runner.invoke(app, [])
     assert "stop here" in result.output
-    assert seen["preset"] == {"own_source": False}  # nothing pre-answered
+    assert seen["preset"] == {}  # nothing pre-answered

@@ -89,7 +89,7 @@ def make_instance(layout: Layout) -> Callable[..., Instance]:
             log_path=layout.log_path(mode, name),  # type: ignore[arg-type]
             data_dir=layout.data_dir(mode, name),  # type: ignore[arg-type]
             venv_dir=instance_dir / "venv",
-            community_dir=layout.shared_source(mode, version, "community"),  # type: ignore[arg-type]
+            community_dir=layout.community_dir(mode, name),  # type: ignore[arg-type]
         )
         data.update(overrides)
         return Instance(**data)  # type: ignore[arg-type]
