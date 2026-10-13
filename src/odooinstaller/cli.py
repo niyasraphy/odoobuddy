@@ -100,7 +100,9 @@ def main(
 ) -> None:
     """With no command, starts the install wizard."""
     if ctx.invoked_subcommand is None:
-        ctx.invoke(install)
+        # Invoke the click command (not the Python function) so option defaults are applied.
+        install_command = ctx.command.get_command(ctx, "install")  # type: ignore[attr-defined]
+        ctx.invoke(install_command)
 
 
 # ------------------------------------------------------------------ install

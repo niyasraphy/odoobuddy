@@ -85,3 +85,20 @@ def test_install_dry_run_changes_nothing(tmp_path, monkeypatch):
 def test_install_rejects_bad_option():
     result = runner.invoke(app, ["install", "--mode", "cloud", "--dry-run"])
     assert result.exit_code == 1 and "--mode must be one of" in result.output
+
+
+def test_no_command_starts_the_wizard(monkeypatch):
+    seen = {}
+
+    def fake_wizard(prompter, ctx):
+        seen["preset"] = ctx.preset
+        from odooinstaller.wizard import WizardAbort
+
+        raise WizardAbort("stop here")
+
+    monkeypatch.setattr("odooinstaller.cli.run_wizard", fake_wizard)
+    # With an empty list, click falls back to sys.argv (pytest's own arguments).
+    monkeypatch.setattr("sys.argv", ["odooinstaller"])
+    result = runner.invoke(app, [])
+    assert "stop here" in result.output
+    assert seen["preset"] == {"own_source": False}  # nothing pre-answered
