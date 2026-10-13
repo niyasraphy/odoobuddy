@@ -1,0 +1,144 @@
+import json
+
+import pytest
+
+from odooinstaller import installer as installer_mod
+from odooinstaller.installer import Installer
+from odooinstaller.models import InstallSpec
+from odooinstaller.registry import MARKER_FILE
+
+from .conftest import RecordingRunner
+
+
+@pytest.fixture(autouse=True)
+def _no_host_lookups(monkeypatch):
+    monkeypatch.setattr(installer_mod, "command_exists", lambda name: False)
+    monkeypatch.setattr(installer_mod, "os_release", lambda: {"VERSION_CODENAME": "noble"})
+    monkeypatch.setattr(installer_mod, "find_uv", lambda: "uv")
+
+
+def run_all(inst: Installer) -> None:
+    for step in inst.plan():
+        step.action()
+
+
+def titles(inst: Installer) -> list[str]:
+    return [s.title for s in inst.plan()]
+
+
+def test_local_install_writes_files_and_registers(layout, registry):
+    spec = InstallSpec(
+        name="shop", version="18.0", mode="local", ide="vscode", http_port=8169, gevent_port=8172
+    )
+    runner = RecordingRunner()
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    run_all(inst)
+
+    instance = registry.get("shop")
+    assert instance is not None and registry.current() == "shop"
+    folder = layout.local_home / "shop"
+    conf = (folder / "odoo.conf").read_text()
+    assert "http_port = 8169" in conf and f"db_password = {inst.credentials.db_password}" in conf
+    assert (folder / "odoo.conf").stat().st_mode & 0o777 == 0o600
+    assert (folder / MARKER_FILE).read_text().strip() == "shop"
+    assert json.loads((folder / ".vscode" / "launch.json").read_text())
+    assert (folder / "start.sh").stat().st_mode & 0o100
+
+    cmds = runner.joined()
+    assert any("git clone" in c and "--branch 18.0" in c and ".sources/18.0/community" in c for c in cmds)
+    assert any("uv venv --seed --python 3.12" in c for c in cmds)
+    assert any(c.startswith("sudo -u postgres") and "psql" in c for c in cmds)
+    assert any("-i base --stop-after-init --without-demo=all" in c for c in cmds)
+    # passwords travel on stdin, never on the command line
+    assert not any(inst.credentials.db_password in c or inst.credentials.admin_password in c for c in cmds)
+    assert any(i and inst.credentials.db_password in i for i in runner.inputs)
+    assert any(i and inst.credentials.admin_password in i for i in runner.inputs)
+
+
+def test_local_plan_has_no_server_steps(layout, registry):
+    spec = InstallSpec(name="dev", version="19.0", mode="local", ide="none")
+    t = titles(Installer(spec, layout=layout, registry=registry, runner=RecordingRunner()))
+    assert not any(word in " ".join(t) for word in ("Nginx", "SSL", "service", "firewall", "IDE", "VS Code"))
+
+
+def test_enterprise_clone_uses_token_env_not_url(layout, registry):
+    spec = InstallSpec(
+        name="ee", version="19.0", mode="local", edition="enterprise", github_token="ghp_secret"
+    )
+    runner = RecordingRunner()
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    inst.download_enterprise()
+    (cmd,), (env,) = runner.commands, runner.envs
+    assert "https://github.com/odoo/enterprise.git" in cmd
+    assert "ghp_secret" not in " ".join(cmd)
+    assert "GIT_CONFIG_VALUE_0" in env
+    assert inst.instance.enterprise_dir is not None
+
+
+def test_server_install(layout, registry, monkeypatch):
+    spec = InstallSpec(
+        name="prod",
+        version="19.0",
+        mode="server",
+        domain="erp.example.com",
+        ssl=True,
+        email="me@example.com",
+        workers=4,
+        firewall=True,
+    )
+    runner = RecordingRunner(root=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    assert titles(inst)[-6:] == [
+        "Create service odoo-prod",
+        "Configure Nginx for erp.example.com",
+        "Get SSL certificate (Let's Encrypt)",
+        "Configure firewall",
+        "Configure log rotation",
+        "Register instance",
+    ]
+    run_all(inst)
+    cmds = runner.joined()
+    assert any(c.startswith("useradd --system") and c.endswith("odoo-prod") for c in cmds)
+    assert any(c.startswith("runuser -u odoo-prod --") and "-i base" in c for c in cmds)
+    assert "systemctl enable --now odoo-prod" in cmds
+    assert any(c.startswith("certbot --nginx -d erp.example.com") and "-m me@example.com" in c for c in cmds)
+    assert "ufw allow Nginx Full" in cmds and "ufw --force enable" in cmds
+    assert (layout.systemd_dir / "odoo-prod.service").exists()
+    assert (layout.nginx_dir / "sites-available" / "odoo-prod.conf").exists()
+    assert (layout.logrotate_dir / "odoo-prod").exists()
+    conf = (layout.server_conf_dir / "prod.conf").read_text()
+    assert "workers = 4" in conf and "proxy_mode = True" in conf
+    assert registry.get("prod").url == "https://erp.example.com"
+
+
+def test_ssl_failure_does_not_fail_install(layout, registry):
+    spec = InstallSpec(name="prod", version="19.0", mode="server", domain="erp.example.com", ssl=True)
+    runner = RecordingRunner(root=True, fail_on="certbot")
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    run_all(inst)
+    assert inst.warnings and "certbot --nginx" in inst.warnings[0]
+    assert registry.get("prod").url == "http://erp.example.com"
+
+
+def test_server_without_domain_opens_port(layout, registry):
+    spec = InstallSpec(name="prod", version="18.0", mode="server", http_port=8069, firewall=True)
+    runner = RecordingRunner(root=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    assert not any("Nginx" in t or "SSL" in t for t in titles(inst))
+    inst.configure_firewall()
+    assert "ufw allow 8069/tcp" in runner.joined()
+
+
+def test_own_source_uses_private_folder(layout, registry):
+    spec = InstallSpec(name="patched", version="18.0", mode="local", own_source=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner())
+    assert inst.instance.community_dir == layout.local_home / "patched" / "src" / "community"
+
+
+def test_rerun_skips_existing_clone(layout, registry):
+    spec = InstallSpec(name="shop", version="18.0", mode="local")
+    runner = RecordingRunner()
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    (inst.instance.community_dir / ".git").mkdir(parents=True)
+    inst.download_community()
+    assert runner.commands == []

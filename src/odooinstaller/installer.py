@@ -1,0 +1,379 @@
+"""Turning an InstallSpec into a working Odoo instance, step by step."""
+
+from __future__ import annotations
+
+import secrets
+import shlex
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+
+from . import postgres, render, sources
+from .layout import Layout
+from .models import InstallSpec, Instance, db_role_for
+from .registry import MARKER_FILE, Registry
+from .system import CommandError, Runner, command_exists, os_release, ssh_port
+from .versions import demo_flags, python_for
+
+APT_BASE = [
+    "git",
+    "curl",
+    "ca-certificates",
+    "build-essential",
+    "libxml2-dev",
+    "libxslt1-dev",
+    "libldap2-dev",
+    "libsasl2-dev",
+    "libpq-dev",
+    "libjpeg-dev",
+    "zlib1g-dev",
+    "libffi-dev",
+    "libssl-dev",
+    "postgresql",
+    "postgresql-client",
+    "fontconfig",
+    "xfonts-75dpi",
+    "xfonts-base",
+]
+APT_SERVER = ["nginx", "certbot", "python3-certbot-nginx", "ufw"]
+
+WKHTMLTOPDF_RELEASE = "0.12.6.1-3"
+# Odoo needs the "patched Qt" build of wkhtmltopdf. Noble reuses the jammy package.
+WKHTMLTOPDF_CODENAMES = {"jammy": "jammy", "noble": "jammy", "bookworm": "bookworm"}
+
+EXTRA_PACKAGES = ["setuptools<81", "wheel"]
+LOCAL_DEV_PACKAGES = ["debugpy", "watchdog"]
+
+
+def find_uv() -> str:
+    try:
+        from uv import find_uv_bin
+
+        return str(find_uv_bin())
+    except (ImportError, FileNotFoundError):
+        return "uv"
+
+
+def generate_password(length: int = 24) -> str:
+    return secrets.token_urlsafe(length)[:length]
+
+
+def wkhtmltopdf_url(codename: str, arch: str) -> str | None:
+    target = WKHTMLTOPDF_CODENAMES.get(codename)
+    if target is None:
+        return None
+    return (
+        "https://github.com/wkhtmltopdf/packaging/releases/download/"
+        f"{WKHTMLTOPDF_RELEASE}/wkhtmltox_{WKHTMLTOPDF_RELEASE}.{target}_{arch}.deb"
+    )
+
+
+def suggested_workers(cpus: int, ram_mb: int) -> int:
+    """Odoo's rule of thumb (2 x CPU + 1), capped so workers fit in RAM (~300 MB each)."""
+    by_cpu = cpus * 2 + 1
+    by_ram = max(1, (ram_mb - 1024) // 300) if ram_mb else by_cpu
+    return max(2, min(by_cpu, by_ram))
+
+
+@dataclass
+class Step:
+    title: str
+    action: Callable[[], None]
+
+
+@dataclass
+class Credentials:
+    db_password: str
+    master_password: str
+    admin_password: str
+
+
+class Installer:
+    def __init__(
+        self,
+        spec: InstallSpec,
+        *,
+        layout: Layout,
+        registry: Registry,
+        runner: Runner,
+    ) -> None:
+        self.spec = spec
+        self.layout = layout
+        self.registry = registry
+        self.runner = runner
+        self.credentials = Credentials(
+            db_password=generate_password(),
+            master_password=generate_password(),
+            admin_password=generate_password(16),
+        )
+        self.instance = self._build_instance()
+        self.warnings: list[str] = []
+
+    def _build_instance(self) -> Instance:
+        spec, layout = self.spec, self.layout
+        instance_dir = layout.instance_dir(spec.mode, spec.name)
+        if spec.own_source:
+            community = instance_dir / "src" / "community"
+            enterprise = instance_dir / "src" / "enterprise"
+        else:
+            community = layout.shared_source(spec.mode, spec.version, "community")
+            enterprise = layout.shared_source(spec.mode, spec.version, "enterprise")
+        return Instance(
+            name=spec.name,
+            version=spec.version,
+            edition=spec.edition,
+            mode=spec.mode,
+            http_port=spec.http_port,
+            gevent_port=spec.gevent_port,
+            db_name=spec.db_name,
+            db_user=db_role_for(spec.name),
+            python=python_for(spec.version),
+            instance_dir=instance_dir,
+            config_path=layout.config_path(spec.mode, spec.name),
+            log_path=layout.log_path(spec.mode, spec.name),
+            data_dir=layout.data_dir(spec.mode, spec.name),
+            venv_dir=instance_dir / "venv",
+            community_dir=community,
+            enterprise_dir=enterprise if spec.edition == "enterprise" else None,
+            domain=spec.domain if spec.mode == "server" else None,
+            ssl=spec.ssl and spec.mode == "server" and bool(spec.domain),
+            ide=spec.ide if spec.mode == "local" else "none",
+            own_source=spec.own_source,
+            created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+
+    # ------------------------------------------------------------------ plan
+
+    def plan(self) -> list[Step]:
+        inst = self.instance
+        server = inst.mode == "server"
+        steps = [
+            Step("Install system packages", self.install_system_packages),
+            Step("Install wkhtmltopdf (PDF reports)", self.install_wkhtmltopdf),
+            Step("Start PostgreSQL", self.start_postgres),
+            Step(f"Download Odoo {inst.version} Community", self.download_community),
+        ]
+        if inst.enterprise_dir is not None:
+            steps.append(Step(f"Download Odoo {inst.version} Enterprise", self.download_enterprise))
+        steps.append(Step(f"Create Python {inst.python} environment", self.create_python_env))
+        steps.append(Step(f"Create database user {inst.db_user}", self.create_db_role))
+        if server:
+            steps.append(Step(f"Create system user {inst.system_user}", self.create_system_user))
+        steps += [
+            Step("Write configuration", self.write_config),
+            Step(f"Create database {inst.db_name}", self.init_database),
+            Step("Set admin password", self.set_admin_password),
+        ]
+        if not server and inst.ide != "none":
+            ide_name = {"vscode": "VS Code", "pycharm": "PyCharm"}[inst.ide]
+            steps.append(Step(f"Configure {ide_name}", self.configure_ide))
+        if server:
+            steps.append(Step(f"Create service {inst.service}", self.install_service))
+            if inst.domain:
+                steps.append(Step(f"Configure Nginx for {inst.domain}", self.configure_nginx))
+            if inst.ssl:
+                steps.append(Step("Get SSL certificate (Let's Encrypt)", self.obtain_ssl))
+            if self.spec.firewall:
+                steps.append(Step("Configure firewall", self.configure_firewall))
+            steps.append(Step("Configure log rotation", self.configure_logrotate))
+        steps.append(Step("Register instance", self.register))
+        return steps
+
+    # ------------------------------------------------------------ the steps
+
+    def install_system_packages(self) -> None:
+        packages = APT_BASE + (APT_SERVER if self.instance.mode == "server" else [])
+        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get"]
+        self.runner.run([*apt, "update"], sudo=True)
+        self.runner.run([*apt, "install", "-y", "--no-install-recommends", *packages], sudo=True)
+
+    def install_wkhtmltopdf(self) -> None:
+        if command_exists("wkhtmltopdf") and not self.runner.dry_run:
+            return
+        codename = os_release().get("VERSION_CODENAME", "")
+        arch = self.runner.run(["dpkg", "--print-architecture"]).stdout.strip() or "amd64"
+        url = wkhtmltopdf_url(codename, arch)
+        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y"]
+        if url is None:
+            # Unknown distribution: fall back to the distro package (works, but no headers/footers).
+            self.runner.run([*apt, "wkhtmltopdf"], sudo=True)
+            return
+        deb = Path("/tmp") / Path(url).name
+        self.runner.run(["curl", "-fsSL", "-o", str(deb), url])
+        self.runner.run([*apt, str(deb)], sudo=True)
+
+    def start_postgres(self) -> None:
+        self.runner.run(["systemctl", "enable", "--now", "postgresql"], sudo=True)
+
+    def download_community(self) -> None:
+        sources.clone_community(self.runner, self.instance.version, self.instance.community_dir)
+
+    def download_enterprise(self) -> None:
+        assert self.instance.enterprise_dir is not None
+        token = self.spec.github_token or ""
+        sources.clone_enterprise(self.runner, self.instance.version, self.instance.enterprise_dir, token)
+
+    def create_python_env(self) -> None:
+        inst = self.instance
+        uv = find_uv()
+        env: dict[str, str] = {}
+        python_dir = self.layout.python_install_dir(inst.mode)
+        if python_dir is not None:
+            env["UV_PYTHON_INSTALL_DIR"] = str(python_dir)
+        self.runner.mkdir(inst.instance_dir)
+        if not inst.python_bin.exists() or self.runner.dry_run:
+            self.runner.run([uv, "venv", "--seed", "--python", inst.python, str(inst.venv_dir)], env=env)
+        packages = EXTRA_PACKAGES + (LOCAL_DEV_PACKAGES if inst.mode == "local" else [])
+        self.runner.run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(inst.python_bin),
+                "-r",
+                str(inst.community_dir / "requirements.txt"),
+                *packages,
+            ],
+            env=env,
+        )
+
+    def create_db_role(self) -> None:
+        postgres.ensure_role(self.runner, self.instance.db_user, self.credentials.db_password)
+
+    def create_system_user(self) -> None:
+        inst = self.instance
+        exists = self.runner.run(["id", "-u", inst.system_user], check=False)
+        if exists.returncode == 0 and not self.runner.dry_run:
+            return
+        self.runner.run(
+            [
+                "useradd",
+                "--system",
+                "--user-group",
+                "--no-create-home",
+                "--home-dir",
+                str(inst.instance_dir),
+                "--shell",
+                "/usr/sbin/nologin",
+                inst.system_user,
+            ]
+        )
+
+    def write_config(self) -> None:
+        inst = self.instance
+        server = inst.mode == "server"
+        owner = inst.system_user if server else None
+        self.runner.mkdir(inst.instance_dir)
+        self.runner.mkdir(inst.instance_dir / "addons")
+        self.runner.mkdir(inst.data_dir, owner=owner, mode=0o750 if server else 0o755)
+        self.runner.mkdir(inst.log_path.parent)
+        if server:
+            self.runner.write_file(inst.log_path, "", mode=0o640, owner=owner)
+        self.runner.write_file(
+            inst.config_path,
+            render.odoo_conf(
+                inst,
+                db_password=self.credentials.db_password,
+                admin_password=self.credentials.master_password,
+                workers=self.spec.workers,
+            ),
+            mode=0o640 if server else 0o600,
+            owner=owner,
+        )
+        self.runner.write_file(inst.instance_dir / MARKER_FILE, inst.name + "\n")
+        if not server:
+            self.runner.write_file(inst.instance_dir / "start.sh", render.start_script(inst), mode=0o755)
+
+    def _odoo_cmd(self, *args: str, subcommand: str | None = None) -> list[str]:
+        inst = self.instance
+        sub = [subcommand] if subcommand else []
+        return [str(inst.python_bin), str(inst.odoo_bin), *sub, "-c", str(inst.config_path), *args]
+
+    def _as_user(self) -> str | None:
+        return self.instance.system_user if self.instance.mode == "server" else None
+
+    def init_database(self) -> None:
+        inst = self.instance
+        cmd = self._odoo_cmd("-d", inst.db_name, "-i", "base", "--stop-after-init")
+        cmd += demo_flags(inst.version, self.spec.demo)
+        self.runner.run(cmd, as_user=self._as_user(), cwd=inst.instance_dir)
+
+    def set_admin_password(self) -> None:
+        inst = self.instance
+        script = (
+            "user = env.ref('base.user_admin')\n"
+            f"user.password = {self.credentials.admin_password!r}\n"
+            "env.cr.commit()\n"
+        )
+        cmd = self._odoo_cmd("-d", inst.db_name, "--log-level=warn", subcommand="shell")
+        self.runner.run(cmd, as_user=self._as_user(), input=script, cwd=inst.instance_dir)
+
+    def configure_ide(self) -> None:
+        inst = self.instance
+        if inst.ide == "vscode":
+            vscode = inst.instance_dir / ".vscode"
+            self.runner.write_file(vscode / "launch.json", render.vscode_launch(inst))
+            self.runner.write_file(vscode / "settings.json", render.vscode_settings(inst))
+            self.runner.write_file(vscode / "extensions.json", render.vscode_extensions())
+        elif inst.ide == "pycharm":
+            run_configs = inst.instance_dir / ".idea" / "runConfigurations"
+            self.runner.write_file(
+                run_configs / f"Odoo_{inst.name.replace('-', '_')}.xml",
+                render.pycharm_run_config(inst),
+            )
+
+    def install_service(self) -> None:
+        inst = self.instance
+        unit = self.layout.systemd_dir / f"{inst.service}.service"
+        self.runner.write_file(unit, render.systemd_unit(inst))
+        self.runner.run(["systemctl", "daemon-reload"])
+        self.runner.run(["systemctl", "enable", "--now", inst.service])
+
+    def configure_nginx(self) -> None:
+        inst = self.instance
+        available = self.layout.nginx_dir / "sites-available" / f"odoo-{inst.name}.conf"
+        enabled = self.layout.nginx_dir / "sites-enabled" / f"odoo-{inst.name}.conf"
+        self.runner.write_file(available, render.nginx_site(inst))
+        self.runner.mkdir(enabled.parent)
+        self.runner.run(["ln", "-sfn", str(available), str(enabled)])
+        self.runner.run(["nginx", "-t"])
+        self.runner.run(["systemctl", "reload", "nginx"])
+
+    def obtain_ssl(self) -> None:
+        inst = self.instance
+        assert inst.domain
+        cmd = ["certbot", "--nginx", "-d", inst.domain, "--non-interactive", "--agree-tos"]
+        cmd += ["--redirect"]
+        cmd += ["-m", self.spec.email] if self.spec.email else ["--register-unsafely-without-email"]
+        try:
+            self.runner.run(cmd)
+        except CommandError as exc:
+            # Usually DNS is not pointing here yet. Odoo works over HTTP meanwhile, so don't
+            # throw away a finished install: explain how to retry instead.
+            inst.ssl = False
+            self.warnings.append(
+                f"SSL certificate failed ({exc.output.splitlines()[-1] if exc.output else exc}). "
+                f"Once {inst.domain} points to this server, run: sudo {shlex.join(cmd)}"
+            )
+
+    def configure_firewall(self) -> None:
+        inst = self.instance
+        self.runner.run(["ufw", "allow", f"{ssh_port() or 22}/tcp"])
+        if inst.domain:
+            self.runner.run(["ufw", "allow", "Nginx Full"])
+        else:
+            self.runner.run(["ufw", "allow", f"{inst.http_port}/tcp"])
+        self.runner.run(["ufw", "--force", "enable"])
+
+    def configure_logrotate(self) -> None:
+        inst = self.instance
+        self.runner.write_file(self.layout.logrotate_dir / f"odoo-{inst.name}", render.logrotate(inst))
+
+    def register(self) -> None:
+        if self.runner.dry_run:
+            self.runner.console.print(f"  [dim]register {self.instance.name}[/dim]")
+            return
+        self.registry.add(self.instance)
+        self.registry.set_current(self.instance.name)
