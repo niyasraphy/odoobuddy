@@ -29,6 +29,14 @@ The installer checks that the service answers after starting it.
 | Odoo itself | 127.0.0.1 only | 127.0.0.1 only, on internal ports (+10000) |
 
 Before requesting a certificate, odoobuddy checks that the domain points to the server.
+If it doesn't, the wizard shows the exact DNS record to add (type `A`, the host name, and
+this server's IP) and lets you choose:
+
+- **Check again**, after you have added the record (it asks a public DNS server, so a
+  record you just added shows up without waiting for local caches)
+- **Continue without a domain**, using `http://SERVER-IP:PORT`
+- **Keep the domain anyway** and add SSL later
+
 If the certificate still fails (DNS not ready yet), the install finishes over HTTP and
 prints the exact `certbot` command to run later.
 

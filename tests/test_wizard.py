@@ -121,13 +121,45 @@ def test_server_with_domain_and_ssl():
     assert spec.ide == "none"
 
 
-def test_server_dns_mismatch_warns_and_defaults_ssl_off():
-    p = Scripted(
-        "server", "19.0", "community", "prod", "8069", False, True, "erp.example.com", False, "3", False
-    )
+SERVER_START = ("server", "19.0", "community", "prod", "8069", False, True, "erp.example.com")
+
+
+def test_server_dns_not_ready_keep_domain_without_ssl():
+    p = Scripted(*SERVER_START, "keep", False, "3", False)
     spec = run_wizard(p, make_ctx(is_root=True, public_ip=lambda: "9.9.9.9"))
+    assert spec.domain == "erp.example.com"
     assert not spec.ssl and spec.workers == 3 and not spec.firewall
-    assert any("SSL will fail" in s for s in p.said)
+    assert any("not to this server (9.9.9.9)" in s for s in p.said)
+    assert any("Type: [bold]A[/bold]" in s and "[bold]erp[/bold]" in s for s in p.said)
+
+
+def test_server_dns_check_again_until_it_points_here():
+    answers = deque([set(), {"9.9.9.9"}])  # no record, then the record the user just added
+    p = Scripted(*SERVER_START, "check", True, "", "", True)
+    ctx = make_ctx(is_root=True, public_ip=lambda: "9.9.9.9", resolve_domain=lambda d: answers.popleft())
+    spec = run_wizard(p, ctx)
+    assert spec.domain == "erp.example.com" and spec.ssl
+    assert any("has no DNS 'A' record" in s for s in p.said)
+    assert any("points to this server" in s for s in p.said)
+
+
+def test_server_dns_not_ready_continue_without_domain():
+    p = Scripted(*SERVER_START, "none", "", True)
+    spec = run_wizard(p, make_ctx(is_root=True, resolve_domain=lambda d: set()))
+    assert spec.domain is None and not spec.ssl
+    assert not any("SSL certificate (HTTPS" in q for q in p.asked)
+
+
+def test_dns_preset_domain_only_warns():
+    from odoobuddy.models import InstallSpec
+    from odoobuddy.wizard import _confirm_dns
+
+    p = Scripted()
+    spec = InstallSpec(
+        mode="server", version="19.0", edition="community", name="prod", domain="erp.example.com"
+    )
+    assert _confirm_dns(p, make_ctx(resolve_domain=lambda d: set()), spec, ask=False) is False
+    assert spec.domain == "erp.example.com" and not p.asked
 
 
 def test_server_without_domain():

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import re
 import socket
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -88,8 +90,24 @@ class QuestionaryPrompter:
 
 
 def resolve_domain(domain: str) -> set[str]:
+    """IPv4 addresses of ``domain``.
+
+    Asks a public resolver first: the local one may cache "not found" for a while, so a
+    record the user just added would not show up when they check again.
+    """
+    request = urllib.request.Request(
+        f"https://cloudflare-dns.com/dns-query?name={urllib.parse.quote(domain)}&type=A",
+        headers={"Accept": "application/dns-json"},
+    )
     try:
-        return {str(info[4][0]) for info in socket.getaddrinfo(domain, 80, proto=socket.IPPROTO_TCP)}
+        with urllib.request.urlopen(request, timeout=5) as response:
+            answers = json.loads(response.read()).get("Answer") or []
+        return {str(a["data"]) for a in answers if a.get("type") == 1}
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        infos = socket.getaddrinfo(domain, 80, family=socket.AF_INET, proto=socket.IPPROTO_TCP)
+        return {str(info[4][0]) for info in infos}
     except OSError:
         return set()
 
@@ -257,6 +275,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
 
 def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     pre = ctx.preset
+    dns_ok = False
     has_domain = (
         bool(pre.get("domain"))
         if "domain" in pre
@@ -273,7 +292,8 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
         if not DOMAIN_RE.fullmatch(domain):
             raise WizardAbort(f"invalid domain: {domain}")
         spec.domain = domain
-        dns_ok = _check_dns(p, ctx, domain)
+        dns_ok = _confirm_dns(p, ctx, spec, ask="domain" not in pre)
+    if spec.domain:
         want_ssl = (
             pre["ssl"]
             if "ssl" in pre
@@ -315,23 +335,60 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
     )
 
 
-def _check_dns(p: Prompter, ctx: WizardContext, domain: str) -> bool:
-    """Let's Encrypt fails if the domain does not point here, so check before trying."""
+def _dns_problem(ctx: WizardContext, domain: str, ip: str | None) -> str | None:
+    """Why Let's Encrypt would fail for ``domain``, or None if it points to this server."""
     addresses = ctx.resolve_domain(domain)
     if not addresses:
-        p.say(
-            f"[yellow]⚠ {domain} does not resolve yet. Add a DNS 'A' record pointing to this server.[/yellow]"
-        )
-        return False
-    ip = ctx.public_ip()
+        return f"{domain} has no DNS 'A' record yet"
     if ip and ip not in addresses:
-        p.say(
-            f"[yellow]⚠ {domain} points to {', '.join(sorted(addresses))}, "
-            f"but this server's public IP is {ip}. SSL will fail until DNS is updated.[/yellow]"
+        return f"{domain} points to {', '.join(sorted(addresses))}, not to this server ({ip})"
+    return None
+
+
+def _dns_record_help(domain: str, ip: str | None) -> str:
+    labels = domain.split(".")
+    host = labels[0] if len(labels) > 2 else "@"
+    target = ip or "this server's public IP"
+    return (
+        "  Add this record where you manage your domain (registrar or DNS provider):\n"
+        f"    Type: [bold]A[/bold]    Name/Host: [bold]{host}[/bold]    "
+        f"Value/Points to: [bold]{target}[/bold]\n"
+        "  [dim]Name is the part before your main domain (@ means the domain itself). "
+        "Changes usually show up within a few minutes.[/dim]"
+    )
+
+
+def _confirm_dns(p: Prompter, ctx: WizardContext, spec: InstallSpec, *, ask: bool) -> bool:
+    """Check the domain points here; if not, help the user fix it or go on without it.
+
+    Returns whether DNS is ready. May clear ``spec.domain`` when the user drops the domain.
+    """
+    assert spec.domain
+    domain = spec.domain
+    ip = ctx.public_ip()
+    while True:
+        problem = _dns_problem(ctx, domain, ip)
+        if problem is None:
+            p.say(f"[green]✓ {domain} points to this server[/green]")
+            return True
+        p.say(f"[yellow]⚠ {problem}. The SSL certificate needs it.[/yellow]")
+        if not ask:
+            return False
+        p.say(_dns_record_help(domain, ip))
+        choice = p.select(
+            "What do you want to do?",
+            [
+                ("check", "I have added the record - check again"),
+                ("none", f"Continue without a domain (http://{ip or 'SERVER-IP'}:{spec.http_port})"),
+                ("keep", f"Keep {domain} anyway and add SSL later"),
+            ],
+            default="check",
         )
-        return False
-    p.say(f"[green]✓ {domain} points to this server[/green]")
-    return True
+        if choice == "none":
+            spec.domain = None
+            return False
+        if choice == "keep":
+            return False
 
 
 def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoSpec]:
