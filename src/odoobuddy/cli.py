@@ -46,12 +46,21 @@ from .wizard import (
 app = typer.Typer(
     help="Install and manage multiple Odoo instances, on your computer or on a server.",
     no_args_is_help=False,
-    add_completion=False,
+    add_completion=True,
     rich_markup_mode="rich",
 )
 console = ui.console
 
 SUPPORTED_OS = {("ubuntu", "jammy"), ("ubuntu", "noble"), ("debian", "bookworm")}
+
+
+def _complete_names(incomplete: str) -> list[str]:
+    """Tab completion for instance names (odoobuddy start <TAB>)."""
+    try:
+        names = Registry(Layout.default()).all()
+    except RegistryError:
+        return []
+    return sorted(n for n in names if n.startswith(incomplete))
 
 
 def _layout() -> Layout:
@@ -422,7 +431,9 @@ def list_instances() -> None:
 
 
 @app.command()
-def info(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def info(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """Show full details of an instance."""
     inst = _instance(name)
     ui.banner(inst)
@@ -437,7 +448,7 @@ def info(name: Optional[str] = typer.Argument(None, help="Instance name")) -> No
 
 
 @app.command()
-def use(name: str = typer.Argument(..., help="Instance name")) -> None:
+def use(name: str = typer.Argument(..., help="Instance name", autocompletion=_complete_names)) -> None:
     """Set the current instance, used when a command is run without a name."""
     registry = _registry()
     inst = registry.get(name)
@@ -448,7 +459,9 @@ def use(name: str = typer.Argument(..., help="Instance name")) -> None:
 
 
 @app.command()
-def start(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def start(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """Start an instance."""
     inst = _instance(name)
     ui.banner(inst, "Starting")
@@ -464,7 +477,9 @@ def start(name: Optional[str] = typer.Argument(None, help="Instance name")) -> N
 
 
 @app.command()
-def stop(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def stop(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """Stop an instance."""
     inst = _instance(name)
     ui.banner(inst, "Stopping")
@@ -475,7 +490,9 @@ def stop(name: Optional[str] = typer.Argument(None, help="Instance name")) -> No
 
 
 @app.command()
-def restart(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def restart(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """Restart an instance."""
     inst = _instance(name)
     ui.banner(inst, "Restarting")
@@ -488,7 +505,9 @@ def restart(name: Optional[str] = typer.Argument(None, help="Instance name")) ->
 
 
 @app.command("run")
-def run_foreground(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def run_foreground(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """Run Odoo in this terminal with live logs (Ctrl+C stops it). No editor needed."""
     inst = _instance(name)
     if inst.mode == "server":
@@ -511,7 +530,7 @@ def run_foreground(name: Optional[str] = typer.Argument(None, help="Instance nam
 
 @app.command("open")
 def open_in_editor(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     with_editor: Optional[str] = typer.Option(
         None, "--with", help="Use (and configure) another editor: " + ", ".join(IDE_NAMES)
     ),
@@ -545,7 +564,7 @@ def open_in_editor(
 
 @app.command()
 def logs(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to show"),
     follow: bool = typer.Option(True, "--follow/--no-follow", "-f", help="Keep watching for new lines"),
 ) -> None:
@@ -558,7 +577,7 @@ def logs(
 
 @app.command()
 def shell(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     db: Optional[str] = typer.Option(None, "--db", help="Database (asked if the instance has several)"),
 ) -> None:
     """Open an Odoo shell (Python with `env`) on one of the instance's databases."""
@@ -572,7 +591,7 @@ def shell(
 
 @app.command()
 def update(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     modules: str = typer.Option("all", help="Modules to upgrade, comma-separated"),
     github_token: Optional[str] = typer.Option(
         None, envvar="ODOO_GITHUB_TOKEN", show_envvar=True, help="Needed to update Enterprise code"
@@ -615,7 +634,7 @@ def update(
 
 @app.command()
 def backup(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     db: Optional[str] = typer.Option(None, "--db", help="Database (asked if the instance has several)"),
     to: Optional[Path] = typer.Option(None, "--to", help="Folder for the backup zip"),
 ) -> None:
@@ -638,7 +657,9 @@ def backup(
 @app.command()
 def restore(
     archive: Path = typer.Argument(..., exists=True, dir_okay=False, help="Backup zip file"),
-    name: Optional[str] = typer.Option(None, "--name", help="Instance to restore into"),
+    name: Optional[str] = typer.Option(
+        None, "--name", help="Instance to restore into", autocompletion=_complete_names
+    ),
     db: str = typer.Option(..., "--db", help="Database to restore into (created or replaced)"),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the typed confirmation"),
 ) -> None:
@@ -658,7 +679,7 @@ def restore(
 
 @app.command()
 def remove(
-    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the typed confirmation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would be deleted"),
 ) -> None:
@@ -680,7 +701,9 @@ def remove(
 def clone(
     url: str = typer.Argument(..., help="Repository URL (https://... or git@...)"),
     branch: Optional[str] = typer.Argument(None, help="Branch (default: the instance's Odoo version)"),
-    instance_name: Optional[str] = typer.Option(None, "--instance", "-i", help="Instance name"),
+    instance_name: Optional[str] = typer.Option(
+        None, "--instance", "-i", help="Instance name", autocompletion=_complete_names
+    ),
     folder: Optional[str] = typer.Option(None, "--dir", help="Folder name under custom/"),
     token: Optional[str] = typer.Option(
         None, envvar="ODOO_REPO_TOKEN", show_envvar=True, help="Access token for a private https repo"
@@ -749,7 +772,9 @@ def pull(
     source: str = typer.Argument(
         ..., help="Server and instance: USER@HOST:INSTANCE (or USER@HOST with --db)"
     ),
-    into: Optional[str] = typer.Option(None, "--into", "-i", help="Local instance to copy into"),
+    into: Optional[str] = typer.Option(
+        None, "--into", "-i", help="Local instance to copy into", autocompletion=_complete_names
+    ),
     db: Optional[str] = typer.Option(None, "--db", help="Database on the server (asked if several)"),
     as_db: Optional[str] = typer.Option(None, "--as", help="Local database name (default: <db>_<date>)"),
     remote_filestore: Optional[str] = typer.Option(
@@ -842,7 +867,9 @@ def pull(
 
 
 @app.command("repos")
-def list_repositories(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+def list_repositories(
+    name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
+) -> None:
     """List the custom repositories of an instance."""
     inst = _instance(name)
     ui.banner(inst, f"Custom repositories in {inst.custom_dir}")

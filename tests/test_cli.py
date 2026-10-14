@@ -103,3 +103,23 @@ def test_no_command_starts_the_wizard(monkeypatch):
     result = runner.invoke(app, [])
     assert "stop here" in result.output
     assert seen["preset"] == {}  # nothing pre-answered
+
+
+def test_tab_completion_for_commands_and_instance_names(isolated, make_instance, tmp_path):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    isolated.add(make_instance("shop"))
+    isolated.add(make_instance("hr", http_port=8169, gevent_port=8172))
+    script = Path(sys.executable).parent / "odoobuddy"
+    env = {**os.environ, "ODOOBUDDY_ROOT": str(tmp_path), "_ODOOBUDDY_COMPLETE": "complete_bash"}
+
+    def complete(words, cword):
+        env.update(COMP_WORDS=words, COMP_CWORD=str(cword))
+        return subprocess.run([str(script)], env=env, capture_output=True, text=True).stdout.split()
+
+    assert complete("odoobuddy st", 1) == ["start", "stop"]
+    assert complete("odoobuddy start ", 2) == ["hr", "shop"]
+    assert complete("odoobuddy logs s", 2) == ["shop"]
