@@ -5,15 +5,83 @@ from __future__ import annotations
 import getpass
 import shlex
 
-from rich.console import Console
+from rich.console import Console, Group, RenderableType
 from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from .ide import find_ide, install_hint
 from .models import IDE_NAMES, PURPOSES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
+
+
+# The welcome screen's logo (made with pyfiglet, fonts "ANSI Shadow" and "small"), and its
+# colours: Odoo's purple fading to its teal, one colour per line.
+LOGO = """\
+ ██████╗ ██████╗  ██████╗  ██████╗ ██████╗ ██╗   ██╗██████╗ ██████╗ ██╗   ██╗
+██╔═══██╗██╔══██╗██╔═══██╗██╔═══██╗██╔══██╗██║   ██║██╔══██╗██╔══██╗╚██╗ ██╔╝
+██║   ██║██║  ██║██║   ██║██║   ██║██████╔╝██║   ██║██║  ██║██║  ██║ ╚████╔╝
+██║   ██║██║  ██║██║   ██║██║   ██║██╔══██╗██║   ██║██║  ██║██║  ██║  ╚██╔╝
+╚██████╔╝██████╔╝╚██████╔╝╚██████╔╝██████╔╝╚██████╔╝██████╔╝██████╔╝   ██║
+ ╚═════╝ ╚═════╝  ╚═════╝  ╚═════╝ ╚═════╝  ╚═════╝ ╚═════╝ ╚═════╝    ╚═╝"""
+LOGO_SMALL = r"""
+         _          _            _    _
+ ___  __| |___  ___| |__ _  _ __| |__| |_  _
+/ _ \/ _` / _ \/ _ \ '_ \ || / _` / _` | || |
+\___/\__,_\___/\___/_.__/\_,_\__,_\__,_|\_, |
+                                        |__/"""[1:]
+LOGO_COLOURS = ["#a45c96", "#975891", "#8a548c", "#5f7d8c", "#3a8a8f", "#017e84"]
+
+
+def welcome(
+    version: str,
+    author: str,
+    instances: list[Instance],
+    statuses: dict[str, str],
+    current: str | None,
+    commands: list[tuple[str, str]],
+    footer: str,
+) -> Group:
+    """The screen shown by `odoobuddy` alone: logo, instances (if any) and where to start."""
+    width = console.width
+    logo = LOGO if width >= 84 else LOGO_SMALL
+    art = Text()
+    for i, line in enumerate(logo.splitlines()):
+        art.append(line + "\n", style=f"bold {LOGO_COLOURS[min(i, len(LOGO_COLOURS) - 1)]}")
+    header = Group(
+        art,
+        Text.from_markup(
+            "[bold]Install and manage Odoo instances, on your computer or on a server.[/]\n"
+            f"[dim]by {escape(author)}[/]"
+        ),
+    )
+    table = instances_table(instances, statuses, current) if instances else None
+    menu = Table.grid(padding=(0, 2))
+    for command, what in commands:
+        menu.add_row("[bold #017e84]\u276f[/]", cmd(command), f"[dim]{escape(what)}[/]")
+    # One width for every box (the widest content, within the terminal), so they line up.
+    contents: list[RenderableType] = [header, menu, *([table] if table else [])]
+    box_width = min(width, max(console.measure(c).maximum for c in contents) + 6)
+
+    def box(content: RenderableType, title: str, colour: str, padding: tuple[int, int]) -> Panel:
+        return Panel(
+            content, title=title, title_align="left", border_style=colour, padding=padding, width=box_width
+        )
+
+    parts: list[RenderableType] = [
+        box(header, f"[bold] Welcome to odoobuddy {escape(version)} [/]", "#875a7b", (1, 2))
+    ]
+    if table:
+        parts.append(box(table, "[bold] Your instances [/]", "cyan", (0, 1)))
+    if table:
+        parts.append(box(menu, "[bold] Commands [/]", "green", (0, 1)))
+    else:
+        first = Group(Text.from_markup("You have no Odoo instances yet. Start with:\n"), menu)
+        parts.append(box(first, "[bold] Get started [/]", "green", (0, 1)))
+    parts.append(Text.from_markup(footer))
+    return Group(*parts)
 
 
 # How each purpose is labelled, so production always stands out.

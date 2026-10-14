@@ -247,17 +247,10 @@ def _check_resources(
 
 
 def _welcome() -> None:
-    console.print(
-        f"[bold]Welcome to odoobuddy[/] [dim]{__version__}[/] · by {AUTHOR}\n"
-        "Install and manage Odoo instances, on your computer or on a server.\n"
-    )
     registry = _registry()
     instances = sorted(registry.all().values(), key=lambda i: i.name)
+    statuses = {i.name: operations.status(i) for i in instances}
     if instances:
-        statuses = {i.name: operations.status(i) for i in instances}
-        console.print(ui.heading("Your instances"))
-        console.print(ui.instances_table(instances, statuses, registry.current()))
-        console.print()
         commands = [
             ("odoobuddy install", "install another Odoo instance"),
             ("odoobuddy status NAME", "is it running, and where to open it"),
@@ -266,12 +259,10 @@ def _welcome() -> None:
             ("odoobuddy info NAME", "paths, ports and configuration"),
         ]
     else:
-        console.print("You have no Odoo instances yet. Start here:\n")
         commands = [("odoobuddy install", "answer a few questions, and Odoo is set up for you")]
     commands += [("odoobuddy help", "all commands"), ("odoobuddy support", "questions, bugs and contact")]
-    width = max(len(c) for c, _ in commands)
-    for command, what in commands:
-        console.print(f"  {ui.cmd(command.ljust(width))}  [dim]{what}[/]")
+    footer = f"[dim]Docs:[/] {ui.link(DOCS_URL)}  [dim]·  ⭐[/] {ui.link(REPO_URL)}"
+    console.print(ui.welcome(__version__, AUTHOR, instances, statuses, registry.current(), commands, footer))
 
 
 # ------------------------------------------------------------------ install
