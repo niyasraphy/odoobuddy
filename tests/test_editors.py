@@ -74,3 +74,15 @@ def test_vscode_settings_allow_folder_open_task(make_instance):
 
     settings = json.loads(render.vscode_settings(make_instance("shop")))
     assert settings["task.allowAutomaticTasks"] == "on"
+
+
+def test_ensure_debug_hook_upgrades_old_instances(make_instance):
+    inst = make_instance("old")
+    site = inst.venv_dir / "lib" / "python3.12" / "site-packages"
+    site.mkdir(parents=True)
+    inst.python_bin.parent.mkdir(parents=True)
+    inst.python_bin.write_text("")
+    assert editors.ensure_debug_hook(RecordingRunner(), inst) is True
+    assert editors.ensure_debug_hook(RecordingRunner(), inst) is False  # already current
+    (site / "_odoobuddy_debug.py").write_text("old version")
+    assert editors.ensure_debug_hook(RecordingRunner(), inst) is True

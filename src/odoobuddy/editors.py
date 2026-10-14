@@ -75,6 +75,17 @@ def install_debug_hook(runner: Runner, instance: Instance) -> None:
     runner.write_file(target / "_odoobuddy_debug.pth", render.DEBUG_HOOK_PTH)
 
 
+def ensure_debug_hook(runner: Runner, instance: Instance) -> bool:
+    """Add the hook to instances created before it existed. Returns True if it was added."""
+    if not instance.python_bin.exists():
+        return False
+    hook = site_packages(instance) / "_odoobuddy_debug.py"
+    if hook.exists() and hook.read_text(encoding="utf-8", errors="replace") == render.DEBUG_HOOK:
+        return False
+    install_debug_hook(runner, instance)
+    return True
+
+
 def debug_env(instance: Instance) -> dict[str, str]:
     return {"ODOOBUDDY_DEBUG_PORT": str(instance.debug_port)}
 

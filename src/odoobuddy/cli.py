@@ -452,6 +452,8 @@ def start(name: Optional[str] = typer.Argument(None, help="Instance name")) -> N
     inst = _instance(name)
     ui.banner(inst, "Starting")
     runner = _runner(False, f"start-{inst.name}")
+    if inst.mode == "local":
+        editors.ensure_debug_hook(runner, inst)
     with SudoSession(runner):
         ok = _with_status("Starting Odoo…", lambda: operations.start(runner, inst))
     if ok:
@@ -500,6 +502,7 @@ def run_foreground(name: Optional[str] = typer.Argument(None, help="Instance nam
         f"Running in this terminal on {inst.url}  —  Ctrl+C to stop\n"
         f'Debugger can attach on port {inst.debug_port} ("Attach to Odoo")',
     )
+    editors.ensure_debug_hook(_runner(False, f"run-{inst.name}"), inst)
     cmd, env = operations.run_command(inst)
     os.chdir(inst.instance_dir)
     os.execvpe(cmd[0], cmd, env)
@@ -525,6 +528,7 @@ def open_in_editor(
     if inst.ide not in IDE_NAMES:
         raise _fail(f"{inst.name} has no editor yet, choose one: odoobuddy open {inst.name} --with vscode")
     ui.banner(inst, f"Opening in {IDE_NAMES[inst.ide]}")
+    editors.ensure_debug_hook(_runner(False, f"open-{inst.name}"), inst)
     if operations.status(inst) == operations.STATUS_RUNNING:
         console.print("[yellow]Odoo is already running, so the editor could not start it (same port).[/]")
         if sys.stdin.isatty() and typer.confirm("Stop the running Odoo first?", default=True):
