@@ -5,9 +5,11 @@ from __future__ import annotations
 import getpass
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from .ide import INSTALL_HINTS, find_ide
 from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
@@ -127,19 +129,31 @@ def ide_help(instance: Instance) -> str:
         f"  odoobuddy start|stop|logs {name}   in the background\n"
     )
     ide = instance.ide
-    if ide in VSCODE_FAMILY:
+
+    def header(folder_name: str) -> str:
         editor = IDE_NAMES[ide]
+        if find_ide(ide):
+            return (
+                f"[bold]{editor}[/] [dim](your installed {editor} is used as-is; "
+                f"only {folder_name} was written)[/]\n"
+            )
         return (
-            f"[bold]{editor}[/] [dim](your installed {editor} is used as-is; only .vscode/ was written)[/]\n"
-            f'  • Odoo starts by itself when the folder opens, in the terminal panel "Odoo: run {name}".\n'
+            f"[bold]{editor}[/] [yellow]not installed yet[/] [dim](only {folder_name} was written)[/]\n"
+            f"  • Install it: {escape(INSTALL_HINTS[ide])}\n"
+        )
+
+    if ide in VSCODE_FAMILY:
+        return (
+            header(".vscode/")
+            + f'  • Odoo starts by itself when the folder opens, in the terminal panel "Odoo: run {name}".\n'
             '    First time only: trust the folder and click "Allow" for automatic tasks.\n'
             f"  • Debug at any time: Run and Debug → {attach} → F5 (no restart needed).\n"
             f"  • Reopen later: odoobuddy open {name}   (folder: {folder})\n\n" + no_editor
         )
     if ide == "pycharm":
         return (
-            "[bold]PyCharm[/] [dim](your installed PyCharm is used as-is; only .idea/ was written)[/]\n"
-            f"  • Odoo starts by itself when the project opens (Startup Tasks), in the Run window.\n"
+            header(".idea/")
+            + f"  • Odoo starts by itself when the project opens (Startup Tasks), in the Run window.\n"
             '    First time only: click "Trust Project"; if asked for an interpreter, choose\n'
             f"    Existing → {_home(instance.python_bin)}\n"
             f'  • To debug: stop it (■) and click Debug (🐞) on "Odoo {instance.version} ({name})".\n'
@@ -147,8 +161,7 @@ def ide_help(instance: Instance) -> str:
         )
     if ide == "zed":
         return (
-            "[bold]Zed[/] [dim](your installed Zed is used as-is; only .zed/ was written)[/]\n"
-            f'  • Start Odoo: Ctrl+Shift+P → "task: spawn" → "Odoo: run {name}"\n'
+            header(".zed/") + f'  • Start Odoo: Ctrl+Shift+P → "task: spawn" → "Odoo: run {name}"\n'
             "    (Zed cannot start tasks automatically when a folder opens)\n"
             f'  • Debug: Ctrl+Shift+P → "debugger: start" → {attach}\n'
             f"  • Reopen later: odoobuddy open {name}   (folder: {folder})\n\n" + no_editor

@@ -86,3 +86,23 @@ def test_ensure_debug_hook_upgrades_old_instances(make_instance):
     assert editors.ensure_debug_hook(RecordingRunner(), inst) is False  # already current
     (site / "_odoobuddy_debug.py").write_text("old version")
     assert editors.ensure_debug_hook(RecordingRunner(), inst) is True
+
+
+def test_help_says_when_the_editor_is_not_installed(make_instance, monkeypatch):
+    from odoobuddy import ui
+
+    inst = make_instance("shop", ide="zed", run_mode="editor")
+    monkeypatch.setattr(ui, "find_ide", lambda ide: None)
+    text = ui.ide_help(inst)
+    assert "not installed yet" in text and "zed.dev/install.sh" in text and "used as-is" not in text
+    monkeypatch.setattr(ui, "find_ide", lambda ide: "/x/zed")
+    assert "your installed Zed is used as-is" in ui.ide_help(inst)
+
+
+def test_after_install_explains_missing_editor(make_instance, monkeypatch):
+    from odoobuddy import cli
+
+    inst = make_instance("shop", ide="zed", run_mode="editor")
+    monkeypatch.setattr(cli, "find_ide", lambda ide: None)
+    message = cli._after_install(RecordingRunner(), inst)
+    assert "Zed is not installed" in message and "odoobuddy open shop" in message

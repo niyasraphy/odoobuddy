@@ -299,3 +299,31 @@ def test_debug_port_must_be_free():
     p = Scripted("local", "19.0", "community", "shop", "8069", False, "vscode")
     with pytest.raises(WizardAbort, match="debugger needs port 28069"):
         run_wizard(p, make_ctx(port_in_use=lambda port: port == 28069))
+
+
+LOCAL_START = ("local", "18.0", "community", "", "", False)
+
+
+def test_missing_editor_check_again_finds_it():
+    ctx = make_ctx(installed_ides={"vscode": "/usr/bin/code", "zed": None}, find_ide=lambda ide: "/x/zed")
+    p = Scripted(*LOCAL_START, "zed", "check")
+    spec = run_wizard(p, ctx)
+    assert (spec.ide, spec.run_mode) == ("zed", "editor")
+    assert any("Zed is not installed" in s and "zed.dev/install.sh" in s for s in p.said)
+    assert any("Zed found" in s for s in p.said)
+
+
+def test_missing_editor_choose_another_or_use_later():
+    ctx = make_ctx(installed_ides={"vscode": "/usr/bin/code", "zed": None})
+    p = Scripted(*LOCAL_START, "zed", "check", "back", "terminal")
+    spec = run_wizard(p, ctx)
+    assert (spec.ide, spec.run_mode) == ("none", "terminal")
+    assert any("still not found" in s for s in p.said)
+
+    p = Scripted(*LOCAL_START, "zed", "later")
+    assert run_wizard(p, make_ctx(installed_ides={"zed": None})).ide == "zed"
+
+
+def test_installed_editor_asks_nothing_more():
+    p = Scripted(*LOCAL_START, "vscode")
+    assert run_wizard(p, make_ctx(installed_ides={"vscode": "/usr/bin/code"})).ide == "vscode"

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from .ide import INSTALL_HINTS
 from .models import (
     BACKEND_OFFSET,
     DEBUG_OFFSET,
@@ -139,6 +140,8 @@ class WizardContext:
     )
     # IDE -> launcher command (None when not installed), used to label and pre-select choices.
     installed_ides: dict[str, str | None] = field(default_factory=dict)
+    # IDE -> launcher command, looked up again after the user installs an editor.
+    find_ide: Callable[[str], str | None] = lambda ide: None
 
 
 def _validate_name(instances: dict[str, Instance]) -> Callable[[str], str]:
@@ -500,20 +503,54 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     # Installed editors first, so the likely answer is at the top.
     order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
     default = next((i for i in order if installed.get(i)), "terminal")
-    choice = p.select(
-        "How do you want to run Odoo? (editors are not installed or changed, only configured)",
-        [(i, label(i)) for i in order]
-        + [
-            ("terminal", f"In a terminal, no editor (odoobuddy run {spec.name})"),
-            ("background", f"In the background (odoobuddy start / stop / logs {spec.name})"),
-        ],
-        default=default,
-    )
+    while True:
+        choice = p.select(
+            "How do you want to run Odoo? (editors are not installed or changed, only configured)",
+            [(i, label(i)) for i in order]
+            + [
+                ("terminal", f"In a terminal, no editor (odoobuddy run {spec.name})"),
+                ("background", f"In the background (odoobuddy start / stop / logs {spec.name})"),
+            ],
+            default=default,
+        )
+        missing = choice in installed and not installed[choice]
+        if not missing or _use_missing_editor(p, ctx, choice):
+            break
     if choice in IDE_NAMES:
         spec.ide, spec.run_mode = cast(Ide, choice), "editor"
     else:
         spec.ide, spec.run_mode = "none", cast(RunMode, choice)
     _check_debug_port(ctx, spec)
+
+
+def _use_missing_editor(p: Prompter, ctx: WizardContext, ide: str) -> bool:
+    """The chosen editor is not installed: True to use it anyway, False to choose again."""
+    name = IDE_NAMES[ide]
+    p.say(
+        f"[yellow]⚠ {name} is not installed on this computer.[/yellow] "
+        "odoobuddy prepares the project for it but does not install editors.\n"
+        f"  To install {name}: [bold]{INSTALL_HINTS[ide]}[/bold]"
+    )
+    while True:
+        action = p.select(
+            "What do you want to do?",
+            [
+                ("check", f"I have installed {name} - check again"),
+                ("later", f"Use {name} anyway, I will install it later"),
+                ("back", "Choose another way to run Odoo"),
+            ],
+            default="check",
+        )
+        if action == "back":
+            return False
+        if action == "later":
+            return True
+        found = ctx.find_ide(ide)
+        if found:
+            ctx.installed_ides[ide] = found
+            p.say(f"[green]✓ {name} found ({found})[/green]")
+            return True
+        p.say(f"[yellow]{name} is still not found. Open a new terminal after installing if needed.[/yellow]")
 
 
 def _check_debug_port(ctx: WizardContext, spec: InstallSpec) -> None:

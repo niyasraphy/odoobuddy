@@ -8,6 +8,16 @@ import shlex
 import shutil
 from pathlib import Path
 
+# How to install each editor (odoobuddy only points the way; it never installs editors).
+INSTALL_HINTS = {
+    "vscode": "sudo snap install code --classic   (or https://code.visualstudio.com/download)",
+    "cursor": "download it from https://cursor.com/downloads",
+    "windsurf": "download it from https://windsurf.com/download",
+    "vscodium": "sudo snap install codium --classic   (or https://vscodium.com)",
+    "pycharm": "sudo snap install pycharm-community --classic   (or https://www.jetbrains.com/pycharm/download)",
+    "zed": "curl -f https://zed.dev/install.sh | sh",
+}
+
 _COMMANDS = {
     "vscode": ["code", "code-insiders"],
     "cursor": ["cursor"],

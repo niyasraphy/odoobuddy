@@ -18,7 +18,7 @@ from rich.panel import Panel
 
 from . import __version__, editors, operations, repos, sources, ui
 from . import pull as pull_mod
-from .ide import detect_ides
+from .ide import INSTALL_HINTS, detect_ides, find_ide
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
 from .models import IDE_NAMES, Instance, RepoSpec
@@ -255,6 +255,7 @@ def install(
         is_root=is_root() or dry_run,
         suggested_workers=suggested_workers(cpu_count(), memory_mb()),
         installed_ides=detect_ides(),
+        find_ide=find_ide,
         check_repo=lambda url, branch, token: _with_status(
             "Checking repository…", lambda: sources.check_repo(Runner(console=console), url, branch, token)
         ),
@@ -368,6 +369,12 @@ def _after_install(runner: Runner, inst: Instance) -> str:
     if inst.run_mode == "terminal":
         return f"[bold]Start Odoo now:[/] odoobuddy run {inst.name}   [dim](Ctrl+C stops it)[/]"
     name = IDE_NAMES[inst.ide]
+    if find_ide(inst.ide) is None:
+        return (
+            f"[yellow]⚠ {name} is not installed, so it was not opened.[/] Install it: "
+            f"[bold]{escape(INSTALL_HINTS[inst.ide])}[/]\n  then run: [bold]odoobuddy open {inst.name}[/]"
+            f"   [dim](or without an editor: odoobuddy run {inst.name})[/]"
+        )
     try:
         editors.open_editor(inst)
     except RuntimeError as exc:

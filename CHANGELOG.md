@@ -3,6 +3,7 @@
 ## [0.1.1] - unreleased
 
 ### Fixed
+- Choosing an editor that is not installed now says so, shows how to install it, and offers to check again, use it later, or pick another way to run Odoo (the summary no longer calls it "your installed" editor)
 - Server without a domain: Nginx now serves the public port and routes `/websocket`, so
   live chat and notifications work with multiple workers (Odoo uses internal ports).
 - Server install: the test installation prints its output instead of writing only to the
