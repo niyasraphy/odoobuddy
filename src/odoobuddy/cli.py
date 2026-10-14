@@ -17,6 +17,7 @@ from rich.markup import escape
 from rich.panel import Panel
 
 from . import __version__, editors, operations, repos, sources, ui
+from . import pull as pull_mod
 from .ide import detect_ides
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
@@ -743,6 +744,103 @@ def clone(
             console.print("[green]✓ Restarted[/] — update the Apps list in Odoo to see new modules")
 
 
+@app.command()
+def pull(
+    source: str = typer.Argument(
+        ..., help="Server and instance: USER@HOST:INSTANCE (or USER@HOST with --db)"
+    ),
+    into: Optional[str] = typer.Option(None, "--into", "-i", help="Local instance to copy into"),
+    db: Optional[str] = typer.Option(None, "--db", help="Database on the server (asked if several)"),
+    as_db: Optional[str] = typer.Option(None, "--as", help="Local database name (default: <db>_<date>)"),
+    remote_filestore: Optional[str] = typer.Option(
+        None, help="Server folder that contains filestore/<db> (only for non-odoobuddy servers)"
+    ),
+    ssh_port: Optional[int] = typer.Option(None, help="SSH port, if not 22"),
+    no_neutralize: bool = typer.Option(False, "--no-neutralize", help="Keep emails, crons, payments ON"),
+    no_filestore: bool = typer.Option(False, "--no-filestore", help="Copy only the database"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Replace an existing local database without asking"),
+) -> None:
+    """Copy a production database and its files from a server to a local instance, made safe.
+
+    Also works as:  odoobuddy LOCAL_INSTANCE pull USER@HOST:INSTANCE
+    """
+    inst = _instance(into)
+    if inst.mode != "local":
+        raise _fail("pull copies INTO a local instance; choose one with --into")
+    try:
+        origin = pull_mod.parse_source(source)
+        remote = pull_mod.Remote(origin.host, ssh_port=ssh_port)
+        ui.banner(inst, f"Pull from {source}")
+        _with_status(f"Connecting to {origin.host}…", remote.connect)
+
+        def choose(databases: list[str]) -> str:
+            if not sys.stdin.isatty():
+                raise pull_mod.PullError(
+                    f"several databases on the server, pick one with --db: {', '.join(databases)}"
+                )
+            return QuestionaryPrompter(console.print).select("Which database?", [(d, d) for d in databases])
+
+        plan = _with_status(
+            "Reading the server…",
+            lambda: pull_mod.plan_pull(
+                remote,
+                origin,
+                inst,
+                db=db,
+                local_db=as_db,
+                remote_filestore=remote_filestore,
+                choose_db=choose,
+            ),
+        )
+    except (pull_mod.PullError, WizardAbort) as exc:
+        raise _fail(str(exc)) from None
+    runner = _runner(False, f"pull-{inst.name}")
+    existing = operations.list_databases(runner, inst)
+    if plan.local_db in existing and not yes:
+        _confirm_by_typing(inst, f"Local database '{plan.local_db}' exists and will be REPLACED.")
+    if no_neutralize:
+        console.print("[bold yellow]⚠ Not neutralizing: this copy may SEND EMAILS and run payments/crons.[/]")
+
+    def step(title: str, action: Callable[[], object]) -> object:
+        holder: list[object] = []
+        elapsed = _progress(title, lambda: holder.append(action()), runner)
+        console.print(f"[green]✓[/green] {escape(title)} [dim]({_duration(elapsed)})[/dim]")
+        return holder[0] if holder else None
+
+    try:
+        result = pull_mod.execute_pull(
+            runner,
+            remote,
+            inst,
+            plan,
+            neutralize=not no_neutralize,
+            copy_filestore=not no_filestore,
+            step=step,
+        )
+    except (pull_mod.PullError, CommandError) as exc:
+        console.print(
+            Panel(escape(getattr(exc, "output", "") or str(exc)), title="pull failed", border_style="red")
+        )
+        raise _fail(f"see the full log: {runner.log_file}") from None
+    sizes = f"database {pull_mod.human_size(result.dump_size)}"
+    if result.filestore_size:
+        sizes += f", files {pull_mod.human_size(result.filestore_size)}"
+    console.print(
+        Panel(
+            f"[bold green]✓ Copied[/] {plan.remote_db} → [bold]{result.local_db}[/] ({sizes})\n"
+            + (
+                "Neutralized: outgoing mail, scheduled actions and integrations are off.\n"
+                if result.neutralized
+                else "[yellow]Not neutralized.[/]\n"
+            )
+            + f"Open: {inst.url}/web?db={result.local_db}\n"
+            "[dim]Users and passwords are the same as on the server.[/]",
+            title=inst.label,
+            expand=False,
+        )
+    )
+
+
 @app.command("repos")
 def list_repositories(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
     """List the custom repositories of an instance."""
@@ -795,7 +893,7 @@ _NAME_FIRST = {
     "remove",
     "repos",
 }
-_NAME_OPTION = {"clone": "--instance", "restore": "--name"}
+_NAME_OPTION = {"clone": "--instance", "restore": "--name", "pull": "--into"}
 
 
 def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
