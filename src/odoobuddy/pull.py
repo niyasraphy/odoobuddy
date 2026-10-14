@@ -308,18 +308,17 @@ def execute_pull(
     if neutralize:
 
         def run_neutralize() -> None:
-            runner.run(
-                [
-                    str(instance.python_bin),
-                    str(instance.odoo_bin),
-                    "neutralize",
-                    "-c",
-                    str(instance.config_path),
-                    "-d",
-                    plan.local_db,
-                ],
-                cwd=instance.instance_dir,
-            )
+            command = [str(instance.python_bin), str(instance.odoo_bin), "neutralize"]
+            command += ["-c", str(instance.config_path), "-d", plan.local_db]
+            try:
+                runner.run(command, cwd=instance.instance_dir)
+            except CommandError as exc:
+                last = exc.output.strip().splitlines()[-1:] or [str(exc)]
+                raise PullError(
+                    f"neutralizing failed, so database {plan.local_db} is NOT safe: it could send "
+                    "real emails or run payments. Do not start Odoo with it; drop it with: "
+                    f"dropdb {plan.local_db}   (details: {last[0]})"
+                ) from None
 
         step("Neutralize (disable emails, scheduled actions, payments...)", run_neutralize)
         result.neutralized = True

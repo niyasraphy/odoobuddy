@@ -218,3 +218,15 @@ def test_instance_first_syntax_for_pull():
         "--into",
         "dev",
     ]
+
+
+def test_failed_neutralize_is_loud(make_instance):
+    inst = make_instance("dev")
+    inst.config_path.parent.mkdir(parents=True)
+    inst.config_path.write_text("[options]\ndb_user = odoo_dev\ndb_password = pw\n")
+    plan = _plan(FakeRemote(), inst, local_db="x")
+    runner = RecordingRunner(fail_on=str(inst.python_bin))
+    with pytest.raises(pull.PullError, match="NOT safe"):
+        pull.execute_pull(
+            runner, FakeRemote(), inst, plan, neutralize=True, copy_filestore=False, step=lambda t, a: a()
+        )
