@@ -6,7 +6,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import tempfile
 import time
@@ -20,7 +19,7 @@ from .installer import find_uv
 from .layout import Layout
 from .models import Instance
 from .registry import Registry
-from .system import CommandError, Runner, command_exists, is_root, port_in_use
+from .system import CommandError, Runner, command_exists, is_root, port_in_use, wait_for_port
 
 STATUS_RUNNING = "running"
 STATUS_STOPPED = "stopped"
@@ -87,17 +86,6 @@ def status(instance: Instance) -> str:
     return STATUS_RUNNING if _local_pid(instance) else STATUS_STOPPED
 
 
-def _wait_for_port(port: int, timeout: float) -> bool:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        with socket.socket() as sock:
-            sock.settimeout(1)
-            if sock.connect_ex(("127.0.0.1", port)) == 0:
-                return True
-        time.sleep(0.5)
-    return False
-
-
 # ------------------------------------------------------------- lifecycle
 
 
@@ -122,7 +110,7 @@ def start(runner: Runner, instance: Instance, *, wait: float = 30) -> bool:
         )
     if runner.dry_run:
         return True
-    return _wait_for_port(instance.http_port, wait)
+    return wait_for_port(instance.backend_http_port, wait)
 
 
 def stop(runner: Runner, instance: Instance) -> None:
@@ -145,7 +133,7 @@ def stop(runner: Runner, instance: Instance) -> None:
 def restart(runner: Runner, instance: Instance) -> bool:
     if instance.mode == "server":
         runner.run(["systemctl", "restart", instance.service], sudo=True)
-        return runner.dry_run or _wait_for_port(instance.http_port, 30)
+        return runner.dry_run or wait_for_port(instance.backend_http_port, 30)
     stop(runner, instance)
     return start(runner, instance)
 
@@ -344,10 +332,10 @@ def remove(runner: Runner, registry: Registry, layout: Layout, instance: Instanc
         runner.run(["systemctl", "disable", instance.service], check=False)
         _delete(runner, unit)
         runner.run(["systemctl", "daemon-reload"], check=False)
+        for folder in ("sites-enabled", "sites-available"):
+            _delete(runner, layout.nginx_dir / folder / f"odoo-{instance.name}.conf")
+        runner.run(["systemctl", "reload", "nginx"], check=False)
         if instance.domain:
-            for folder in ("sites-enabled", "sites-available"):
-                _delete(runner, layout.nginx_dir / folder / f"odoo-{instance.name}.conf")
-            runner.run(["systemctl", "reload", "nginx"], check=False)
             if instance.ssl:
                 runner.run(
                     ["certbot", "delete", "--non-interactive", "--cert-name", instance.domain],

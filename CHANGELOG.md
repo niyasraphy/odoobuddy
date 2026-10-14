@@ -1,6 +1,20 @@
 # Changelog
 
-## [0.1.0] - unreleased
+## [0.1.1] - 2026-10-14
+
+### Fixed
+- Server without a domain: Nginx now serves the public port and routes `/websocket`, so
+  live chat and notifications work with multiple workers (Odoo uses internal ports).
+- Server install: the test installation prints its output instead of writing only to the
+  log file, and the installer checks that the service really answers after starting.
+- A running local instance is detected by its config file when the pid file is missing.
+- Odoo 20: install `markdown2`, which Odoo uses but does not list in its requirements.
+
+### Added
+- Cursor, Windsurf and VSCodium support (same F5 debugging as VS Code), detected
+  automatically like VS Code and PyCharm.
+
+## [0.1.0] - 2026-10-13
 
 ### Added
 - Interactive install wizard for local and server mode, with a flag for every question.

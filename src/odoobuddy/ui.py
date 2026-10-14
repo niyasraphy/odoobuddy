@@ -9,7 +9,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .ide import find_ide
-from .models import InstallSpec, Instance
+from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
 
@@ -55,7 +55,7 @@ def summary(spec: InstallSpec) -> Panel:
         ("Ports", f"{spec.http_port} (web), {spec.gevent_port} (live chat / websocket)"),
     ]
     if spec.mode == "local":
-        rows.append(("IDE", {"vscode": "VS Code", "pycharm": "PyCharm", "none": "none"}[spec.ide]))
+        rows.append(("IDE", IDE_NAMES.get(spec.ide, "none")))
     else:
         rows += [
             ("Domain", spec.domain or "none (access by IP and port)"),
@@ -129,10 +129,12 @@ def ide_help(instance: Instance) -> str:
             f'  3. Top-right run menu: choose "Odoo {instance.version} ({instance.name})" → Debug (🐞)\n'
             + stop_first
         )
-    if instance.ide == "vscode":
+    if instance.ide in VSCODE_FAMILY:
+        name = IDE_NAMES[instance.ide]
+        default_cmd = {"vscode": "code", "cursor": "cursor", "windsurf": "windsurf", "vscodium": "codium"}
         return (
-            "[bold]VS Code[/]  (your installed VS Code is used as-is; only .vscode/ was written)\n"
-            f"  1. Open the folder: {launcher or 'code'} {folder}\n"
+            f"[bold]{name}[/]  (your installed {name} is used as-is; only .vscode/ was written)\n"
+            f"  1. Open the folder: {launcher or default_cmd[instance.ide]} {folder}\n"
             f'  2. Press F5 (configuration "Odoo {instance.version} ({instance.name})")\n' + stop_first
         )
     if instance.mode == "local":

@@ -9,7 +9,20 @@ from typing import Any, Literal
 
 Mode = Literal["local", "server"]
 Edition = Literal["community", "enterprise"]
-Ide = Literal["vscode", "pycharm", "none"]
+Ide = Literal["vscode", "cursor", "windsurf", "vscodium", "pycharm", "none"]
+
+# Display names, in the order the wizard offers them.
+IDE_NAMES: dict[str, str] = {
+    "vscode": "VS Code",
+    "cursor": "Cursor",
+    "windsurf": "Windsurf",
+    "vscodium": "VSCodium",
+    "pycharm": "PyCharm",
+}
+# Editors built on VS Code read the same .vscode/launch.json and settings.json.
+VSCODE_FAMILY = frozenset({"vscode", "cursor", "windsurf", "vscodium"})
+
+BACKEND_OFFSET = 10000
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,30}")
 
@@ -89,6 +102,21 @@ class Instance:
     @property
     def odoo_bin(self) -> Path:
         return self.community_dir / "odoo-bin"
+
+    # A server without a domain is reached at http://SERVER-IP:<http_port>. Nginx listens on that
+    # port (it must route /websocket to Odoo's gevent port, which multi-worker Odoo needs), so
+    # Odoo itself moves to internal ports offset by BACKEND_OFFSET.
+    @property
+    def nginx_on_public_port(self) -> bool:
+        return self.mode == "server" and not self.domain
+
+    @property
+    def backend_http_port(self) -> int:
+        return self.http_port + BACKEND_OFFSET if self.nginx_on_public_port else self.http_port
+
+    @property
+    def backend_gevent_port(self) -> int:
+        return self.gevent_port + BACKEND_OFFSET if self.nginx_on_public_port else self.gevent_port
 
     @property
     def custom_dir(self) -> Path:

@@ -12,10 +12,10 @@ from pathlib import Path
 
 from . import postgres, render, sources
 from .layout import Layout
-from .models import InstallSpec, Instance, db_role_for
+from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance, db_role_for
 from .postgres import client_env, read_db_settings
 from .registry import MARKER_FILE, Registry
-from .system import CommandError, Runner, command_exists, os_release, ssh_port
+from .system import CommandError, Runner, command_exists, os_release, ssh_port, wait_for_port
 from .versions import no_demo_flags, python_for
 
 APT_BASE = [
@@ -48,7 +48,8 @@ WKHTMLTOPDF_CODENAMES = {"jammy": "jammy", "noble": "jammy", "bookworm": "bookwo
 # web and their assets, so most dependency or Python package problems show up here.
 CHECK_MODULE = "contacts"
 
-EXTRA_PACKAGES = ["setuptools<81", "wheel"]
+# markdown2: Odoo 20 renders markdown with it but does not list it in requirements.txt.
+EXTRA_PACKAGES = ["setuptools<81", "wheel", "markdown2"]
 LOCAL_DEV_PACKAGES = ["debugpy", "watchdog"]
 
 
@@ -168,12 +169,12 @@ class Installer:
             Step(f"Test installation ({CHECK_MODULE} in a temporary database)", self.test_installation),
         ]
         if not server and inst.ide != "none":
-            ide_name = {"vscode": "VS Code", "pycharm": "PyCharm"}[inst.ide]
+            ide_name = IDE_NAMES[inst.ide]
             steps.append(Step(f"Configure {ide_name}", self.configure_ide))
         if server:
             steps.append(Step(f"Create service {inst.service}", self.install_service))
-            if inst.domain:
-                steps.append(Step(f"Configure Nginx for {inst.domain}", self.configure_nginx))
+            where = inst.domain or f"port {inst.http_port}"
+            steps.append(Step(f"Configure Nginx for {where}", self.configure_nginx))
             if inst.ssl:
                 steps.append(Step("Get SSL certificate (Let's Encrypt)", self.obtain_ssl))
             if self.spec.firewall:
@@ -326,6 +327,8 @@ class Installer:
         self.drop_check_db()  # leftover from an interrupted run
         cmd = self._odoo_cmd("-d", self.check_db, "-i", f"base,{CHECK_MODULE}", "--stop-after-init")
         cmd += no_demo_flags(inst.version)
+        if inst.mode == "server":
+            cmd.append("--logfile=/dev/stderr")  # show progress/errors instead of the log file
         try:
             self.runner.run(cmd, as_user=self._as_user(), cwd=inst.instance_dir)
         finally:
@@ -342,7 +345,7 @@ class Installer:
 
     def configure_ide(self) -> None:
         inst = self.instance
-        if inst.ide == "vscode":
+        if inst.ide in VSCODE_FAMILY:
             vscode = inst.instance_dir / ".vscode"
             self.runner.write_file(vscode / "launch.json", render.vscode_launch(inst))
             self.runner.write_file(vscode / "settings.json", render.vscode_settings(inst))
@@ -368,6 +371,10 @@ class Installer:
         self.runner.write_file(unit, render.systemd_unit(inst))
         self.runner.run(["systemctl", "daemon-reload"])
         self.runner.run(["systemctl", "enable", "--now", inst.service])
+        if not self.runner.dry_run and not wait_for_port(inst.backend_http_port, 60):
+            self.warnings.append(
+                f"Odoo did not answer within 60s. Check: systemctl status {inst.service} and {inst.log_path}"
+            )
 
     def configure_nginx(self) -> None:
         inst = self.instance

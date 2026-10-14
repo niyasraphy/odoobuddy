@@ -20,7 +20,7 @@ from . import __version__, operations, repos, sources, ui
 from .ide import detect_ides
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
-from .models import Instance, RepoSpec
+from .models import IDE_NAMES, Instance, RepoSpec
 from .registry import Registry, RegistryError, resolve
 from .system import (
     CommandError,
@@ -218,7 +218,7 @@ def install(
     for key, allowed in (
         ("edition", {"community", "enterprise"}),
         ("mode", {"local", "server"}),
-        ("ide", {"vscode", "pycharm", "none"}),
+        ("ide", {*IDE_NAMES, "none"}),
     ):
         if key in preset and preset[key] not in allowed:
             raise _fail(f"--{key} must be one of: {', '.join(sorted(allowed))}")

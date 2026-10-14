@@ -8,6 +8,7 @@ import shutil
 import socket
 import subprocess
 import threading
+import time
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -168,6 +169,17 @@ class SudoSession:
     def __exit__(self, *exc: object) -> None:
         self._stop.set()
         self.runner.sudo_noninteractive = False
+
+
+def wait_for_port(port: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with socket.socket() as sock:
+            sock.settimeout(1)
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                return True
+        time.sleep(0.5)
+    return False
 
 
 def port_in_use(port: int) -> bool:

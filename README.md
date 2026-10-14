@@ -1,9 +1,14 @@
 # odoobuddy
 
+[![PyPI](https://img.shields.io/pypi/v/odoobuddy)](https://pypi.org/project/odoobuddy/)
+[![Python](https://img.shields.io/pypi/pyversions/odoobuddy)](https://pypi.org/project/odoobuddy/)
+[![CI](https://github.com/niyasraphy/odoobuddy/actions/workflows/ci.yml/badge.svg)](https://github.com/niyasraphy/odoobuddy/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/pypi/l/odoobuddy)](LICENSE)
+
 **Install and manage many Odoo instances, of any version, on your laptop or on production servers, with one command.**
 
 ```bash
-pip install odoobuddy
+pipx install odoobuddy      # or: pip install odoobuddy
 odoobuddy
 ```
 
@@ -44,10 +49,10 @@ and admin password yourself.
 - **Community or Enterprise.** Your GitHub token is checked *before* cloning. If it doesn't have access, the wizard offers to retry or continues with Community. The token is never saved to disk, git config or logs.
 - **Many instances side by side.** Run Odoo 17, 18, 19 and 20 at the same time, or several instances of one version. Each instance gets its own Python environment, config, database user, ports, filestore and logs.
 - **The right Python for each version**, installed automatically with [uv](https://github.com/astral-sh/uv). Odoo 16 gets 3.10 and Odoo 19 gets 3.12, with no system Python changes.
-- **Local mode** for development: ready-to-debug **VS Code** (`F5`) or **PyCharm** projects, dev mode with auto-reload, and a `start.sh` script. Installed IDEs are detected and pre-selected. Your IDE is never installed or changed; only `.vscode/` or `.idea/` is written in the instance folder.
+- **Local mode** for development: ready-to-debug projects for **VS Code, Cursor, Windsurf, VSCodium** (`F5`) or **PyCharm**, dev mode with auto-reload, and a `start.sh` script. Installed IDEs are detected and pre-selected. Your IDE is never installed or changed; only `.vscode/` or `.idea/` is written in the instance folder.
 - **Server mode** for production:
   - a dedicated system user and a **systemd** service
-  - **Nginx** with websocket support
+  - **Nginx** with websocket support, also without a domain: Nginx then serves `http://SERVER-IP:PORT`, so live chat and notifications work with multiple workers
   - free **Let's Encrypt SSL**, after checking that your domain points to the server
   - a **ufw firewall** that never locks out your SSH port
   - worker counts tuned to your CPU and RAM

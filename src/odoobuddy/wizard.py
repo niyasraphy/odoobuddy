@@ -9,7 +9,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
-from .models import Edition, Ide, InstallSpec, Instance, Mode, RepoSpec, validate_name
+from .models import (
+    BACKEND_OFFSET,
+    IDE_NAMES,
+    Edition,
+    Ide,
+    InstallSpec,
+    Instance,
+    Mode,
+    RepoSpec,
+    validate_name,
+)
 from .ports import check_port, gevent_port_for, suggest_ports
 from .sources import AccessResult
 from .versions import major
@@ -238,22 +248,21 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     if mode == "local":
         installed = ctx.installed_ides
 
-        def label(ide: str, name: str, hint: str) -> str:
+        def label(ide: str) -> str:
+            hint = "ready run configuration" if ide == "pycharm" else "debug with F5"
+            text = f"{IDE_NAMES[ide]} ({hint})"
             if ide not in installed:
-                return f"{name} ({hint})"
-            state = "✓ installed" if installed[ide] else "not found on this computer"
-            return f"{name} ({hint}) - {state}"
+                return text
+            return f"{text} - {'✓ installed' if installed[ide] else 'not found on this computer'}"
 
-        default_ide = next((i for i in ("vscode", "pycharm") if installed.get(i)), "vscode")
+        # Installed editors first, so the likely answer is at the top.
+        order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
+        default_ide = next((i for i in order if installed.get(i)), "vscode")
         spec.ide = pre.get("ide") or cast(
             Ide,
             p.select(
                 "Which IDE do you use? (it is not installed or changed, only configured)",
-                [
-                    ("vscode", label("vscode", "VS Code", "debug with F5")),
-                    ("pycharm", label("pycharm", "PyCharm", "ready run configuration")),
-                    ("none", "None / other (I'll use ./start.sh)"),
-                ],
+                [(i, label(i)) for i in order] + [("none", "None / other (I'll use ./start.sh)")],
                 default=default_ide,
             ),
         )
@@ -301,6 +310,14 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
     else:
         p.say(f"[dim]Without a domain, Odoo will be reachable at http://SERVER-IP:{spec.http_port}[/dim]")
 
+    if not spec.domain:
+        # Nginx takes the public port; Odoo listens internally on the offset ports.
+        for port in (spec.http_port + BACKEND_OFFSET, spec.gevent_port + BACKEND_OFFSET):
+            if port > 65535 or ctx.port_in_use(port):
+                raise WizardAbort(
+                    f"Odoo needs internal port {port} (your port + {BACKEND_OFFSET}), which is not free; "
+                    "choose another port"
+                )
     spec.workers = pre.get("workers") or int(
         p.text(
             "Number of Odoo workers (based on this server's CPU and RAM):",

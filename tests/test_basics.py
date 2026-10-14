@@ -251,7 +251,9 @@ def test_find_ide(monkeypatch, tmp_path):
     toolbox.mkdir(parents=True)
     (toolbox / "pycharm").write_text("")
     monkeypatch.setitem(ide._PATTERNS, "pycharm", [str(toolbox / "pycharm*")])
-    assert ide.detect_ides() == {"vscode": "/usr/bin/code", "pycharm": str(toolbox / "pycharm")}
+    found = ide.detect_ides()
+    assert found["vscode"] == "/usr/bin/code" and found["pycharm"] == str(toolbox / "pycharm")
+    assert set(found) == {"vscode", "cursor", "windsurf", "vscodium", "pycharm"}
     monkeypatch.setitem(ide._PATTERNS, "pycharm", [])
     assert ide.find_ide("pycharm", desktop_dirs=[]) is None
 

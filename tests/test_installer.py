@@ -15,6 +15,7 @@ def _no_host_lookups(monkeypatch):
     monkeypatch.setattr(installer_mod, "command_exists", lambda name: False)
     monkeypatch.setattr(installer_mod, "os_release", lambda: {"VERSION_CODENAME": "noble"})
     monkeypatch.setattr(installer_mod, "find_uv", lambda: "uv")
+    monkeypatch.setattr(installer_mod, "wait_for_port", lambda port, timeout: True)
 
 
 def run_all(inst: Installer) -> None:
@@ -126,11 +127,21 @@ def test_ssl_failure_does_not_fail_install(layout, registry):
     assert registry.get("prod").url == "http://erp.example.com"
 
 
-def test_server_without_domain_opens_port(layout, registry):
-    spec = InstallSpec(name="prod", version="18.0", mode="server", http_port=8069, firewall=True)
+def test_server_without_domain_puts_nginx_on_the_public_port(layout, registry):
+    from odoobuddy import render
+
+    spec = InstallSpec(
+        name="prod", version="18.0", mode="server", http_port=8069, gevent_port=8072, firewall=True, workers=3
+    )
     runner = RecordingRunner(root=True)
     inst = Installer(spec, layout=layout, registry=registry, runner=runner)
-    assert not any("Nginx" in t or "SSL" in t for t in titles(inst))
+    assert "Configure Nginx for port 8069" in titles(inst) and not any("SSL" in t for t in titles(inst))
+    conf = render.odoo_conf(inst.instance, db_password="x", master_password="y", workers=3)
+    assert "http_port = 18069" in conf and "gevent_port = 18072" in conf
+    assert "http_interface = 127.0.0.1" in conf
+    site = render.nginx_site(inst.instance)
+    assert "listen 8069;" in site and "server_name _;" in site
+    assert "server 127.0.0.1:18072;" in site and "location /websocket" in site
     inst.configure_firewall()
     assert "ufw allow 8069/tcp" in runner.joined()
 
@@ -227,3 +238,32 @@ def test_custom_repos_are_cloned_and_their_requirements_installed(layout, regist
     assert any(
         str(inst.instance.custom_dir / "web" / "requirements.txt") in " ".join(c) for c in runner.commands
     )
+
+
+def test_server_warns_when_service_does_not_answer(layout, registry, monkeypatch):
+    monkeypatch.setattr(installer_mod, "wait_for_port", lambda port, timeout: False)
+    spec = InstallSpec(name="prod", version="19.0", mode="server", domain="erp.example.com")
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner(root=True))
+    inst.install_service()
+    assert inst.warnings and "systemctl status odoo-prod" in inst.warnings[0]
+
+
+def test_server_install_check_prints_to_screen(layout, registry):
+    spec = InstallSpec(name="prod", version="19.0", mode="server", domain="erp.example.com")
+    runner = RecordingRunner(root=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    inst.write_config()
+    inst.test_installation()
+    check = next(c for c in runner.joined() if "-i base,contacts" in c)
+    assert check.endswith("--logfile=/dev/stderr")
+
+
+@pytest.mark.parametrize("ide", ["cursor", "windsurf", "vscodium"])
+def test_vscode_based_editors_get_vscode_files(layout, registry, ide):
+    spec = InstallSpec(name="shop", version="19.0", mode="local", ide=ide)
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner())
+    assert any(
+        t.startswith("Configure ") and t.endswith(("Cursor", "Windsurf", "VSCodium")) for t in titles(inst)
+    )
+    inst.configure_ide()
+    assert json.loads((layout.local_home / "shop" / ".vscode" / "launch.json").read_text())["configurations"]

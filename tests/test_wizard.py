@@ -241,3 +241,9 @@ def test_server_email_left_empty_is_not_asked_again():
     q = Scripted("4")
     edited = run_wizard(q, make_ctx(is_root=True, preset=answers_without(first, "workers")))
     assert edited.workers == 4 and len(q.asked) == 1
+
+
+def test_server_without_domain_needs_free_internal_ports():
+    p = Scripted("server", "18.0", "community", "prod", "8069", False, False)
+    with pytest.raises(WizardAbort, match="internal port 18069"):
+        run_wizard(p, make_ctx(is_root=True, port_in_use=lambda port: port == 18069))

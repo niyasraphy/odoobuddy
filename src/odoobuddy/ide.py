@@ -9,7 +9,10 @@ import shutil
 from pathlib import Path
 
 _COMMANDS = {
-    "vscode": ["code", "code-insiders", "codium"],
+    "vscode": ["code", "code-insiders"],
+    "cursor": ["cursor"],
+    "windsurf": ["windsurf"],
+    "vscodium": ["codium"],
     "pycharm": ["pycharm", "pycharm-community", "pycharm-professional", "charm"],
 }
 _PATTERNS = {
@@ -18,6 +21,20 @@ _PATTERNS = {
         "/usr/share/code/bin/code",
         "/var/lib/flatpak/exports/bin/com.visualstudio.code",
         "~/.local/share/flatpak/exports/bin/com.visualstudio.code",
+    ],
+    "cursor": [
+        "/usr/share/cursor/cursor",
+        "/opt/Cursor/cursor",
+        "/opt/cursor/cursor",
+        "~/Applications/[Cc]ursor*.AppImage",
+        "~/[Cc]ursor*.AppImage",
+    ],
+    "windsurf": ["/usr/share/windsurf/windsurf", "/opt/Windsurf/windsurf", "/opt/windsurf/windsurf"],
+    "vscodium": [
+        "/snap/bin/codium",
+        "/usr/share/codium/bin/codium",
+        "/var/lib/flatpak/exports/bin/com.vscodium.codium",
+        "~/.local/share/flatpak/exports/bin/com.vscodium.codium",
     ],
     "pycharm": [
         "/snap/bin/pycharm-*",
@@ -43,6 +60,9 @@ _DESKTOP_DIRS = [
 ]
 _DESKTOP_FILES = {
     "vscode": ["code.desktop", "code_code.desktop", "com.visualstudio.code.desktop"],
+    "cursor": ["cursor.desktop", "cursor*.desktop"],
+    "windsurf": ["windsurf.desktop"],
+    "vscodium": ["codium.desktop", "codium_codium.desktop", "com.vscodium.codium.desktop"],
     "pycharm": ["jetbrains-pycharm*.desktop", "pycharm*.desktop", "com.jetbrains.PyCharm*.desktop"],
 }
 
