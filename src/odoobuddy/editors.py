@@ -1,6 +1,7 @@
 """Editor projects for local instances, and opening the editor with Odoo running inside it.
 
-Editors are never installed or changed: only project files are written into the instance
+Editors are only installed when the user asks (see ide.editor_install); their settings
+are never changed: only project files are written into the instance
 folder (.vscode/, .idea/ or .zed/).
 """
 

@@ -3,8 +3,19 @@
 ## How Odoo runs
 
 The wizard asks **"How do you want to run Odoo?"** and lists the editors installed on your
-computer first. Editors are never installed or changed; only a project folder (`.vscode/`,
+computer first. Your editor's settings are never changed; only a project folder (`.vscode/`,
 `.idea/` or `.zed/`) is written inside the instance.
+
+If the editor you pick is **not installed**, the wizard says so and offers:
+
+- **Install it now**: Zed with its official installer (no password needed); VS Code,
+  VSCodium and PyCharm with `snap`, on systems that have it (asks for your password).
+  It is installed together with Odoo, then opened.
+- **Install it yourself**: the wizard shows the download link and waits; choose
+  *check again* when it's installed, and the install continues.
+- Use it anyway (install it later), or choose another way to run Odoo.
+
+`odoobuddy open NAME --with EDITOR` offers the same when the editor is missing.
 
 | Choice | After the install | Debugging |
 |---|---|---|

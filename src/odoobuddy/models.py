@@ -72,6 +72,7 @@ class InstallSpec:
     gevent_port: int = 8072
     ide: Ide = "none"
     run_mode: RunMode = "background"
+    install_editor: bool = False  # the user asked odoobuddy to install the chosen editor
     domain: str | None = None
     ssl: bool = False
     email: str | None = None

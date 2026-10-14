@@ -267,3 +267,36 @@ def test_vscode_based_editors_get_vscode_files(layout, registry, ide):
     )
     inst.configure_ide()
     assert json.loads((layout.local_home / "shop" / ".vscode" / "launch.json").read_text())["configurations"]
+
+
+def test_editor_install_step_only_when_asked(layout, registry, monkeypatch):
+    from odoobuddy import ide
+    from odoobuddy.ide import EditorInstall
+
+    def make(**extra):
+        spec = InstallSpec(name="a", version="18.0", mode="local", ide="pycharm", run_mode="editor", **extra)
+        return Installer(spec, layout=layout, registry=registry, runner=RecordingRunner())
+
+    inst = make(install_editor=True)
+    steps = titles(inst)
+    assert steps.index("Install PyCharm") == steps.index("Configure PyCharm") - 1
+    assert "Install PyCharm" not in titles(make())
+
+    snap = EditorInstall(["snap", "install", "pycharm", "--classic"], True, "snap")
+    monkeypatch.setattr(ide, "editor_install", lambda i: snap)
+    inst.install_editor()
+    assert "sudo snap install pycharm --classic" in inst.runner.joined()
+    assert not inst.warnings
+
+
+def test_editor_install_failure_is_only_a_warning(layout, registry, monkeypatch):
+    from odoobuddy import ide
+    from odoobuddy.ide import EditorInstall
+
+    spec = InstallSpec(
+        name="a", version="18.0", mode="local", ide="zed", run_mode="editor", install_editor=True
+    )
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner(fail_on="sh -c"))
+    monkeypatch.setattr(ide, "editor_install", lambda i: EditorInstall(["sh", "-c", "curl"], False, "x"))
+    inst.install_editor()
+    assert "Installing Zed failed" in inst.warnings[0] and "odoobuddy open a" in inst.warnings[0]

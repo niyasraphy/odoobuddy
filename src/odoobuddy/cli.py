@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -18,7 +19,7 @@ from rich.panel import Panel
 
 from . import __version__, editors, operations, repos, sources, ui
 from . import pull as pull_mod
-from .ide import INSTALL_HINTS, detect_ides, find_ide
+from .ide import detect_ides, editor_install, find_ide, install_hint
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
 from .models import IDE_NAMES, Instance, RepoSpec
@@ -256,6 +257,7 @@ def install(
         suggested_workers=suggested_workers(cpu_count(), memory_mb()),
         installed_ides=detect_ides(),
         find_ide=find_ide,
+        editor_install=editor_install,
         check_repo=lambda url, branch, token: _with_status(
             "Checking repository…", lambda: sources.check_repo(Runner(console=console), url, branch, token)
         ),
@@ -371,8 +373,8 @@ def _after_install(runner: Runner, inst: Instance) -> str:
     name = IDE_NAMES[inst.ide]
     if find_ide(inst.ide) is None:
         return (
-            f"[yellow]⚠ {name} is not installed, so it was not opened.[/] Install it: "
-            f"[bold]{escape(INSTALL_HINTS[inst.ide])}[/]\n  then run: [bold]odoobuddy open {inst.name}[/]"
+            f"[yellow]⚠ {name} is not installed, so it was not opened.[/] To install it: "
+            f"[bold]{escape(install_hint(inst.ide))}[/]\n  then run: [bold]odoobuddy open {inst.name}[/]"
             f"   [dim](or without an editor: odoobuddy run {inst.name})[/]"
         )
     try:
@@ -540,6 +542,31 @@ def run_foreground(
     os.execvpe(cmd[0], cmd, env)
 
 
+def _get_editor(inst: Instance) -> None:
+    """The instance's editor is missing: install it (if we can and the user agrees), or wait
+    while the user installs it. Fails if it is still not there."""
+    name = IDE_NAMES[inst.ide]
+    give_up = (
+        f"{name} is not installed. Install it ({install_hint(inst.ide)}), then: odoobuddy open {inst.name}"
+    )
+    console.print(f"[yellow]⚠ {name} is not installed on this computer.[/]")
+    if not sys.stdin.isatty():
+        raise _fail(give_up)
+    how = editor_install(inst.ide)
+    if how is not None and typer.confirm(f"Install {name} now ({how.how})?", default=True):
+        runner = _runner(False, f"install-{inst.ide}")
+        try:
+            with SudoSession(runner) if how.sudo else contextlib.nullcontext():
+                _progress(f"Installing {name}", lambda: runner.run(how.command, sudo=how.sudo), runner)
+        except (CommandError, PermissionError) as exc:
+            console.print(f"[red]Installing {name} failed:[/] {escape(str(exc))}")
+    while find_ide(inst.ide) is None:
+        console.print(f"Please {escape(install_hint(inst.ide))}")
+        if not typer.confirm(f"Have you installed {name}? Check again", default=True):
+            raise _fail(give_up)
+    console.print(f"[green]✓ {name} is installed[/]")
+
+
 @app.command("open")
 def open_in_editor(
     name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
@@ -567,6 +594,8 @@ def open_in_editor(
             runner = _runner(False, f"stop-{inst.name}")
             with SudoSession(runner):
                 operations.stop(runner, inst)
+    if find_ide(inst.ide) is None:
+        _get_editor(inst)
     try:
         editors.open_editor(inst)
     except RuntimeError as exc:

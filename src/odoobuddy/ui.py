@@ -9,7 +9,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
-from .ide import INSTALL_HINTS, find_ide
+from .ide import find_ide, install_hint
 from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
@@ -56,7 +56,11 @@ def summary(spec: InstallSpec) -> Panel:
         ("Ports", f"{spec.http_port} (web), {spec.gevent_port} (live chat / websocket)"),
     ]
     if spec.mode == "local":
-        rows.append(("IDE", IDE_NAMES.get(spec.ide, "none")))
+        if spec.ide in IDE_NAMES:
+            editor = IDE_NAMES[spec.ide] + (" (will be installed)" if spec.install_editor else "")
+            rows.append(("Runs in", editor))
+        else:
+            rows.append(("Runs in", "a terminal" if spec.run_mode == "terminal" else "the background"))
     else:
         rows += [
             ("Domain", spec.domain or "none (access by IP and port)"),
@@ -139,7 +143,7 @@ def ide_help(instance: Instance) -> str:
             )
         return (
             f"[bold]{editor}[/] [yellow]not installed yet[/] [dim](only {folder_name} was written)[/]\n"
-            f"  • Install it: {escape(INSTALL_HINTS[ide])}\n"
+            f"  • Install it: {escape(install_hint(ide))}\n"
         )
 
     if ide in VSCODE_FAMILY:

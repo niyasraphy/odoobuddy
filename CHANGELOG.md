@@ -15,6 +15,7 @@
   method, including systemd on servers.
 
 ### Added
+- Missing editor: the wizard (and `odoobuddy open --with`) can install Zed with its official installer, and VS Code, VSCodium and PyCharm through snap; for others it shows the download link and waits until the editor is installed
 - Server wizard: when the domain does not point to the server yet, shows the DNS record to add and offers to check again, continue without a domain, or keep it and add SSL later
 - "How do you want to run Odoo?": in an editor, in a terminal (`odoobuddy run`) or in
   the background. Editors open automatically after the install and Odoo starts inside

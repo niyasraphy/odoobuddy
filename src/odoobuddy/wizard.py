@@ -11,7 +11,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
-from .ide import INSTALL_HINTS
+from .ide import EditorInstall, install_hint
 from .models import (
     BACKEND_OFFSET,
     DEBUG_OFFSET,
@@ -142,6 +142,8 @@ class WizardContext:
     installed_ides: dict[str, str | None] = field(default_factory=dict)
     # IDE -> launcher command, looked up again after the user installs an editor.
     find_ide: Callable[[str], str | None] = lambda ide: None
+    # IDE -> how odoobuddy can install it here, or None (then the user installs it).
+    editor_install: Callable[[str], EditorInstall | None] = lambda ide: None
 
 
 def _validate_name(instances: dict[str, Instance]) -> Callable[[str], str]:
@@ -422,12 +424,12 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
 # Settings that can be changed from the summary, and the answers each one invalidates.
 _SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall")
 EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
-    "mode": ("Local or server", ("mode", "ide", "run_mode", *_SERVER_KEYS)),
+    "mode": ("Local or server", ("mode", "ide", "run_mode", "install_editor", *_SERVER_KEYS)),
     "version": ("Odoo version", ("version",)),
     "edition": ("Edition (Community / Enterprise)", ("edition", "github_token")),
     "name": ("Instance name", ("name",)),
     "http_port": ("Port", ("http_port",)),
-    "ide": ("How Odoo runs", ("ide", "run_mode")),
+    "ide": ("How Odoo runs", ("ide", "run_mode", "install_editor")),
     "repos": ("Custom repositories", ("repos",)),
     "domain": ("Domain name", ("domain", "ssl", "email")),
     "ssl": ("SSL certificate", ("ssl", "email")),
@@ -475,6 +477,7 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
     if spec.mode == "local":
         preset["ide"] = spec.ide
         preset["run_mode"] = spec.run_mode
+        preset["install_editor"] = spec.install_editor
     else:
         preset.update(domain=spec.domain, workers=spec.workers, firewall=spec.firewall)
         if spec.domain:
@@ -490,6 +493,7 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     if "ide" in pre or "run_mode" in pre:
         spec.ide = pre.get("ide", "none")
         spec.run_mode = pre.get("run_mode") or ("editor" if spec.ide != "none" else "background")
+        spec.install_editor = bool(pre.get("install_editor")) and spec.ide != "none"
         _check_debug_port(ctx, spec)
         return
     installed = ctx.installed_ides
@@ -503,9 +507,10 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     # Installed editors first, so the likely answer is at the top.
     order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
     default = next((i for i in order if installed.get(i)), "terminal")
+    spec.install_editor = False
     while True:
         choice = p.select(
-            "How do you want to run Odoo? (editors are not installed or changed, only configured)",
+            "How do you want to run Odoo? (only the project is configured, editor settings stay as they are)",
             [(i, label(i)) for i in order]
             + [
                 ("terminal", f"In a terminal, no editor (odoobuddy run {spec.name})"),
@@ -514,7 +519,7 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
             default=default,
         )
         missing = choice in installed and not installed[choice]
-        if not missing or _use_missing_editor(p, ctx, choice):
+        if not missing or _use_missing_editor(p, ctx, spec, choice):
             break
     if choice in IDE_NAMES:
         spec.ide, spec.run_mode = cast(Ide, choice), "editor"
@@ -523,24 +528,32 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     _check_debug_port(ctx, spec)
 
 
-def _use_missing_editor(p: Prompter, ctx: WizardContext, ide: str) -> bool:
-    """The chosen editor is not installed: True to use it anyway, False to choose again."""
+def _use_missing_editor(p: Prompter, ctx: WizardContext, spec: InstallSpec, ide: str) -> bool:
+    """The chosen editor is not installed: True to go on with it, False to choose again.
+
+    Offers to install it during the Odoo install when odoobuddy can, otherwise asks the
+    user to install it now and checks again before continuing.
+    """
     name = IDE_NAMES[ide]
-    p.say(
-        f"[yellow]⚠ {name} is not installed on this computer.[/yellow] "
-        "odoobuddy prepares the project for it but does not install editors.\n"
-        f"  To install {name}: [bold]{INSTALL_HINTS[ide]}[/bold]"
-    )
-    while True:
-        action = p.select(
-            "What do you want to do?",
-            [
-                ("check", f"I have installed {name} - check again"),
-                ("later", f"Use {name} anyway, I will install it later"),
-                ("back", "Choose another way to run Odoo"),
-            ],
-            default="check",
+    auto = ctx.editor_install(ide)
+    p.say(f"[yellow]⚠ {name} is not installed on this computer.[/yellow]")
+    if auto is None:
+        p.say(
+            f"  Please {install_hint(ide)}\n"
+            '  Then come back here and choose "check again" - this window waits for you.'
         )
+    choices = [("install", f"Install {name} now ({auto.how})")] if auto else []
+    choices += [
+        ("check", f"I have installed {name} - check again"),
+        ("later", f"Use {name} anyway, I will install it later"),
+        ("back", "Choose another way to run Odoo"),
+    ]
+    while True:
+        action = p.select("What do you want to do?", choices, default=choices[0][0])
+        if action == "install":
+            spec.install_editor = True
+            p.say(f"[dim]{name} will be installed together with Odoo, then opened.[/dim]")
+            return True
         if action == "back":
             return False
         if action == "later":
@@ -550,7 +563,10 @@ def _use_missing_editor(p: Prompter, ctx: WizardContext, ide: str) -> bool:
             ctx.installed_ides[ide] = found
             p.say(f"[green]✓ {name} found ({found})[/green]")
             return True
-        p.say(f"[yellow]{name} is still not found. Open a new terminal after installing if needed.[/yellow]")
+        p.say(
+            f"[yellow]{name} is still not found.[/yellow] Finish installing it "
+            f"({install_hint(ide)}), then check again."
+        )
 
 
 def _check_debug_port(ctx: WizardContext, spec: InstallSpec) -> None:

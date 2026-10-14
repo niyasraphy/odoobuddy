@@ -304,13 +304,27 @@ def test_debug_port_must_be_free():
 LOCAL_START = ("local", "18.0", "community", "", "", False)
 
 
-def test_missing_editor_check_again_finds_it():
-    ctx = make_ctx(installed_ides={"vscode": "/usr/bin/code", "zed": None}, find_ide=lambda ide: "/x/zed")
-    p = Scripted(*LOCAL_START, "zed", "check")
+def test_missing_editor_user_installs_it_then_check_again():
+    ctx = make_ctx(installed_ides={"vscode": None}, find_ide=lambda ide: "/usr/bin/code")
+    p = Scripted(*LOCAL_START, "vscode", "check")
     spec = run_wizard(p, ctx)
-    assert (spec.ide, spec.run_mode) == ("zed", "editor")
-    assert any("Zed is not installed" in s and "zed.dev/install.sh" in s for s in p.said)
-    assert any("Zed found" in s for s in p.said)
+    assert (spec.ide, spec.run_mode, spec.install_editor) == ("vscode", "editor", False)
+    assert any("Visual Studio Code is not installed" in s or "VS Code is not installed" in s for s in p.said)
+    assert any("Please" in s and "code.visualstudio.com" in s and "waits for you" in s for s in p.said)
+    assert any("found (/usr/bin/code)" in s for s in p.said)
+
+
+def test_missing_editor_odoobuddy_installs_it():
+    from odoobuddy.ide import EditorInstall
+
+    ctx = make_ctx(
+        installed_ides={"zed": None},
+        editor_install=lambda ide: EditorInstall(["sh", "-c", "x"], False, "official installer"),
+    )
+    p = Scripted(*LOCAL_START, "zed", "install")
+    spec = run_wizard(p, ctx)
+    assert (spec.ide, spec.install_editor) == ("zed", True)
+    assert not any("Please" in s for s in p.said)  # no manual steps when we install it
 
 
 def test_missing_editor_choose_another_or_use_later():
@@ -327,3 +341,14 @@ def test_missing_editor_choose_another_or_use_later():
 def test_installed_editor_asks_nothing_more():
     p = Scripted(*LOCAL_START, "vscode")
     assert run_wizard(p, make_ctx(installed_ides={"vscode": "/usr/bin/code"})).ide == "vscode"
+
+
+def test_install_editor_survives_changing_another_setting():
+    from odoobuddy.models import InstallSpec
+    from odoobuddy.wizard import answers_without
+
+    spec = InstallSpec(
+        name="a", version="18.0", mode="local", ide="zed", run_mode="editor", install_editor=True
+    )
+    assert answers_without(spec, "http_port")["install_editor"] is True
+    assert "install_editor" not in answers_without(spec, "ide")

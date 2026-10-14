@@ -69,8 +69,10 @@ and admin password yourself.
 ## Running Odoo locally
 
 The wizard asks **"How do you want to run Odoo?"** and lists the editors installed on your
-computer first. Editors are never installed or changed: only a project folder (`.vscode/`,
-`.idea/` or `.zed/`) is written inside the instance.
+computer first. Your editor's settings are never changed: only a project folder (`.vscode/`,
+`.idea/` or `.zed/`) is written inside the instance. If the editor isn't installed, the wizard
+can install it for you (Zed, and VS Code / VSCodium / PyCharm through snap), or wait while you
+install it yourself.
 
 | Choice | After the install | Debugging |
 |---|---|---|

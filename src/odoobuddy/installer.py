@@ -171,6 +171,8 @@ class Installer:
         ]
         if not server and inst.ide != "none":
             ide_name = IDE_NAMES[inst.ide]
+            if self.spec.install_editor:
+                steps.append(Step(f"Install {ide_name}", self.install_editor))
             steps.append(Step(f"Configure {ide_name}", self.configure_ide))
         if server:
             steps.append(Step(f"Create service {inst.service}", self.install_service))
@@ -346,6 +348,25 @@ class Installer:
         env = client_env(read_db_settings(inst.config_path))
         self.runner.run(["dropdb", "--if-exists", "--force", self.check_db], env=env)
         shutil.rmtree(inst.data_dir / "filestore" / self.check_db, ignore_errors=True)
+
+    def install_editor(self) -> None:
+        """Install the editor the user asked for. A failure doesn't stop the Odoo install."""
+        from .ide import editor_install, install_hint
+
+        inst = self.instance
+        how = editor_install(inst.ide)
+        name = IDE_NAMES[inst.ide]
+        if how is None:
+            self.warnings.append(f"{name} could not be installed automatically: {install_hint(inst.ide)}")
+            return
+        try:
+            self.runner.run(how.command, sudo=how.sudo)
+        except CommandError as exc:
+            last = exc.output.strip().splitlines()[-1:] or [str(exc)]
+            self.warnings.append(
+                f"Installing {name} failed ({last[0]}). Install it yourself: {install_hint(inst.ide)}, "
+                f"then run: odoobuddy open {inst.name}"
+            )
 
     def configure_ide(self) -> None:
         from . import editors

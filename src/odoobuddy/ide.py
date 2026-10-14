@@ -6,17 +6,52 @@ from __future__ import annotations
 import glob
 import shlex
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 
-# How to install each editor (odoobuddy only points the way; it never installs editors).
-INSTALL_HINTS = {
-    "vscode": "sudo snap install code --classic   (or https://code.visualstudio.com/download)",
-    "cursor": "download it from https://cursor.com/downloads",
-    "windsurf": "download it from https://windsurf.com/download",
-    "vscodium": "sudo snap install codium --classic   (or https://vscodium.com)",
-    "pycharm": "sudo snap install pycharm-community --classic   (or https://www.jetbrains.com/pycharm/download)",
-    "zed": "curl -f https://zed.dev/install.sh | sh",
+# Where to download each editor, for the ones odoobuddy cannot install itself.
+DOWNLOAD_URLS = {
+    "vscode": "https://code.visualstudio.com/download",
+    "cursor": "https://cursor.com/downloads",
+    "windsurf": "https://windsurf.com/download",
+    "vscodium": "https://vscodium.com",
+    "pycharm": "https://www.jetbrains.com/pycharm/download",
+    "zed": "https://zed.dev/download",
 }
+# Official snap packages (Ubuntu and other systems with snap).
+SNAP_PACKAGES = {"vscode": "code", "vscodium": "codium", "pycharm": "pycharm"}
+ZED_INSTALL = "curl -fsSL https://zed.dev/install.sh | sh"
+
+
+@dataclass(frozen=True)
+class EditorInstall:
+    command: list[str]
+    sudo: bool
+    how: str  # shown to the user, e.g. "with snap, needs your password"
+
+
+def editor_install(ide: str) -> EditorInstall | None:
+    """How odoobuddy can install ``ide`` here (only when the user asks), or None."""
+    if ide == "zed":
+        # Zed's official installer: goes into ~/.local, no admin rights.
+        return EditorInstall(["sh", "-c", ZED_INSTALL], False, "official installer from zed.dev, no password")
+    package = SNAP_PACKAGES.get(ide)
+    if package and shutil.which("snap"):
+        return EditorInstall(
+            ["snap", "install", package, "--classic"], True, "with snap, needs your password"
+        )
+    return None
+
+
+def install_hint(ide: str) -> str:
+    """What the user can do to install ``ide`` themselves."""
+    url = DOWNLOAD_URLS.get(ide, "")
+    if ide == "zed":
+        return ZED_INSTALL
+    if ide in SNAP_PACKAGES and shutil.which("snap"):
+        return f"sudo snap install {SNAP_PACKAGES[ide]} --classic   (or download: {url})"
+    return f"download and install it from {url}"
+
 
 _COMMANDS = {
     "vscode": ["code", "code-insiders"],
@@ -48,7 +83,7 @@ _PATTERNS = {
         "~/.local/share/flatpak/exports/bin/com.vscodium.codium",
     ],
     "pycharm": [
-        "/snap/bin/pycharm-*",
+        "/snap/bin/pycharm*",
         "~/.local/share/JetBrains/Toolbox/scripts/pycharm*",
         "~/pycharm*/bin/pycharm.sh",
         "~/Applications/pycharm*/bin/pycharm.sh",
