@@ -56,3 +56,4 @@ Run `odoobuddy COMMAND --help` for all options.
 | `--version` | Show the odoobuddy version |
 | `--install-completion` | Tab completion for bash, zsh or fish (commands and instance names) |
 | `--dry-run` | On install, update and remove: show every command, change nothing |
+| `ODOOBUDDY_NO_ANIMATION=1` | Environment variable: no walking buddy during long install steps |

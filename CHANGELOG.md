@@ -40,13 +40,19 @@
 - Before the first question, the install shows what the machine has (OS, CPUs, RAM, free
   disk), whether Ubuntu is busy installing updates, another web server on port 80, and the
   instances already there.
-- The install summary shows the `odoobuddy install ... --yes` command that repeats the same
-  install, and offers "Start over".
+- The install summary offers "Start over", and the `odoobuddy install ... --yes` command that
+  repeats the same install.
 - `doctor` warns when a production instance has no nightly backups.
 - After an install, odoobuddy offers to turn on Tab completion (bash, zsh, fish) when it
   is not on yet; `odoobuddy --install-completion` still does it by hand.
 - A new welcome screen: framed, with the odoobuddy logo, your instances and the commands
   to start with.
+- A roomier install screen: the machine check in a frame, "Setup" and "Installing" section
+  lines, hints indented under their question, a grouped summary, and the real server IP in
+  the "without a domain" hint. The command that repeats the install is now a menu choice
+  ("Show the command for scripts"), one option per line, without `sudo` when you are root.
+- During long install steps a little buddy walks along, peeks whether the step is done,
+  checks his watch and has a coffee. `ODOOBUDDY_NO_ANIMATION=1` turns him off.
 - Nightly backups on servers: the wizard offers them (on by default), and
   `odoobuddy backup NAME --nightly` / `--no-nightly` turns them on or off later. Every
   database is backed up around 02:30 and the last 7 are kept, in `/var/backups/odoobuddy/NAME/`.

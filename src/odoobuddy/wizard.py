@@ -93,7 +93,8 @@ class QuestionaryPrompter:
         return bool(self._ask(questionary.confirm(message, default=default, auto_enter=False)))
 
     def say(self, message: str) -> None:
-        self._say(message)
+        # Indented, so hints and results read as part of the question above them.
+        self._say("\n".join("  " + line for line in message.split("\n")))
 
 
 def resolve_domain(domain: str) -> set[str]:
@@ -396,7 +397,8 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
                 or None
             )
     else:
-        p.say(f"[dim]Without a domain, Odoo will be reachable at http://SERVER-IP:{spec.http_port}[/dim]")
+        ip = ctx.public_ip() or "SERVER-IP"
+        p.say(f"[dim]Without a domain, Odoo will be reachable at http://{ip}:{spec.http_port}[/dim]")
 
     if not spec.domain:
         # Nginx takes the public port; Odoo listens internally on the offset ports.

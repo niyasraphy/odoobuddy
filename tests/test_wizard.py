@@ -166,7 +166,7 @@ def test_server_without_domain():
     p = Scripted("production", "18.0", "community", "prod", "8069", False, "", "", True, False, "keep")
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain is None and not spec.ssl
-    assert any("SERVER-IP:8069" in s for s in p.said)
+    assert any("http://1.2.3.4:8069" in s for s in p.said)  # the server's own IP
 
 
 def test_presets_skip_questions():

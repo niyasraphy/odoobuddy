@@ -215,7 +215,17 @@ def _system_check() -> None:
     if instances:
         listed = ", ".join(f"{i.name} ({i.role}, Odoo {i.version})" for i in instances)
         lines.append(f"[dim]Already here: {listed}[/]")
-    console.print("\n".join(lines) + "\n")
+    title = " This server " if detect_mode()[0] == "server" else " This computer "
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title=f"[bold]{title}[/]",
+            title_align="left",
+            border_style=ui.BRAND,
+            padding=(0, 2),
+            expand=False,
+        )
+    )
 
 
 def _check_resources(
@@ -310,6 +320,7 @@ def install(
 ) -> None:
     """Install a new Odoo instance (asks questions for anything not given as an option)."""
     _system_check()
+    ui.section("Setup")
 
     preset: dict[str, object] = {}
     for key, value in {
@@ -388,11 +399,8 @@ def install(
     prompter = QuestionaryPrompter(console.print)
     first_preset = dict(preset)
     while True:
+        console.print()
         console.print(ui.summary(spec))
-        if not yes:
-            console.print(
-                f"[dim]To repeat this install from a script:[/]\n[dim]{escape(ui.install_command(spec))}[/]"
-            )
         if yes:
             break
         if not sys.stdin.isatty():
@@ -406,6 +414,7 @@ def install(
                 [
                     ("install", go),
                     ("edit", "Change a setting"),
+                    ("command", "Show the command for scripts (same install, no questions)"),
                     ("restart", "Start over"),
                     ("cancel", "Cancel"),
                 ],
@@ -413,6 +422,18 @@ def install(
             )
             if choice == "install":
                 break
+            if choice == "command":
+                console.print(
+                    Panel(
+                        escape(ui.install_command(spec, as_root=is_root())),
+                        title="[bold] Repeat this install from a script [/]",
+                        title_align="left",
+                        border_style="dim",
+                        padding=(1, 2),
+                        expand=False,
+                    )
+                )
+                continue
             if choice == "cancel":
                 console.print("Cancelled, nothing was changed.")
                 raise typer.Exit(1)
@@ -432,6 +453,7 @@ def install(
     runner = _runner(dry_run, f"install-{spec.name}")
     installer = Installer(spec, layout=_layout(), registry=registry, runner=runner)
     steps = installer.plan()
+    ui.section(f"{'Dry run of' if dry_run else 'Installing'} {spec.name}")
     if not dry_run:
         console.print(f"[dim]Full log: {runner.log_file}[/dim]")
     try:
@@ -569,11 +591,14 @@ def _progress(title: str, action: Callable[[], object], runner: Runner) -> float
     started = last_output = time.monotonic()
     last_line = ""
     done = threading.Event()
+    animate = ui.animations_on()
     with console.status(escape(title) + "…") as status:
 
         def refresh() -> None:
             now = time.monotonic()
             text = f"{escape(title)}… [dim]{_duration(now - started)}[/dim]"
+            if animate:
+                text += "\n  " + ui.buddy_frame(now - started)
             if last_line:
                 text += f"\n  [dim]{escape(last_line[:110])}[/dim]"
             if _is_apt_lock_wait(last_line):
@@ -594,7 +619,8 @@ def _progress(title: str, action: Callable[[], object], runner: Runner) -> float
             refresh()
 
         def tick() -> None:
-            while not done.wait(1):
+            # Often enough for the buddy to walk smoothly; once a second is enough for the clock.
+            while not done.wait(0.25 if animate else 1):
                 refresh()
 
         threading.Thread(target=tick, daemon=True).start()

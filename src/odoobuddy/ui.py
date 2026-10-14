@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import getpass
+import os
 import shlex
 
 from rich.console import Console, Group, RenderableType
 from rich.markup import escape
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
@@ -71,7 +73,7 @@ def welcome(
         )
 
     parts: list[RenderableType] = [
-        box(header, f"[bold] Welcome to odoobuddy {escape(version)} [/]", "#875a7b", (1, 2))
+        box(header, f"[bold] Welcome to odoobuddy {escape(version)} [/]", BRAND, (1, 2))
     ]
     if table:
         parts.append(box(table, "[bold] Your instances [/]", "cyan", (0, 1)))
@@ -82,6 +84,9 @@ def welcome(
         parts.append(box(first, "[bold] Get started [/]", "green", (0, 1)))
     parts.append(Text.from_markup(footer))
     return Group(*parts)
+
+
+BRAND = "#875a7b"  # Odoo's purple, for frames and section lines
 
 
 # How each purpose is labelled, so production always stands out.
@@ -127,59 +132,115 @@ def instances_table(instances: list[Instance], statuses: dict[str, str], current
     return table
 
 
+# The buddy who keeps you company during long install steps: he walks along the line,
+# peeks whether the step is done, checks his watch and has a coffee, then walks again.
+# Plain characters that every terminal font has; ODOOBUDDY_NO_ANIMATION=1 turns him off.
+BUDDY_TRACK = 24  # how far he walks, in columns
+BUDDY_WALK = ("ᕕ( ᐛ )ᕗ", "ᕕ( ᐖ )ᕗ")
+BUDDY_SCENES = (  # (seconds, figure, what he is doing)
+    (2.0, "(・_・ヾ", "peeking… not done yet"),
+    (2.0, "( •_•)⌚", "checks his watch"),
+    (3.0, "( ˘▽˘)っ☕", "coffee break"),
+    (1.5, "(•‿•)b", "still going, all good"),
+)
+_WALK_SECONDS = BUDDY_TRACK / 6  # he walks at 6 columns per second
+_CYCLE = _WALK_SECONDS + sum(seconds for seconds, _, _ in BUDDY_SCENES)
+
+
+def buddy_frame(elapsed: float) -> str:
+    """The buddy's line ``elapsed`` seconds into a step (markup, one line)."""
+    t = elapsed % _CYCLE
+    if t < _WALK_SECONDS:
+        step = int(t * 6)
+        figure = BUDDY_WALK[step % 2]
+        return f"[dim]{'·' * step}[/][{BRAND}]{figure}[/]"
+    t -= _WALK_SECONDS
+    for seconds, figure, doing in BUDDY_SCENES:
+        if t < seconds:
+            return f"[dim]{'·' * BUDDY_TRACK}[/][{BRAND}]{figure}[/]  [dim italic]{doing}[/]"
+        t -= seconds
+    return ""  # not reached: the scenes fill the rest of the cycle
+
+
+def animations_on() -> bool:
+    return not os.environ.get("ODOOBUDDY_NO_ANIMATION") and console.is_terminal
+
+
+def section(title: str) -> None:
+    """A titled line that separates the parts of a long screen (setup, installing, ...)."""
+    console.print()
+    console.print(Rule(f"[bold]{escape(title)}[/]", align="left", style=BRAND))
+
+
 def summary(spec: InstallSpec) -> Panel:
-    rows = [
-        ("Instance", spec.name),
-        ("Odoo", f"{spec.version} {spec.edition.title()}"),
-        (
-            "Purpose",
-            f"{PURPOSES[spec.role]} ({'on this server' if spec.mode == 'server' else 'on this computer'})",
-        ),
-        ("Ports", f"{spec.http_port} (web), {spec.gevent_port} (live chat / websocket)"),
+    where = "on this server" if spec.mode == "server" else "on this computer"
+    groups = [
+        [
+            ("Instance", f"[bold]{escape(spec.name)}[/]"),
+            ("Odoo", f"{spec.version} {spec.edition.title()}"),
+            ("Purpose", f"{PURPOSES[spec.role]} ({where})"),
+        ],
+        [("Ports", f"{spec.http_port} (web), {spec.gevent_port} (live chat / websocket)")],
     ]
     if spec.mode == "local":
         if spec.ide in IDE_NAMES:
-            editor = IDE_NAMES[spec.ide] + (" (will be installed)" if spec.install_editor else "")
-            rows.append(("Runs in", editor))
+            runs_in = IDE_NAMES[spec.ide] + (" (will be installed)" if spec.install_editor else "")
         else:
-            rows.append(("Runs in", "a terminal" if spec.run_mode == "terminal" else "the background"))
+            runs_in = "a terminal" if spec.run_mode == "terminal" else "the background"
+        groups[1].append(("Runs in", runs_in))
     else:
-        rows += [
-            ("Domain", spec.domain or "none (access by IP and port)"),
+        groups[1] += [
+            ("Domain", escape(spec.domain) if spec.domain else "none (access by IP and port)"),
             ("HTTPS", "Let's Encrypt" if spec.ssl else "no"),
-            ("Workers", str(spec.workers)),
-            ("Firewall", "enable (SSH + web only)" if spec.firewall else "leave unchanged"),
-            ("Backups", "every night, the last 7 kept" if spec.daily_backups else "only when you run them"),
         ]
+        groups.append(
+            [
+                ("Workers", str(spec.workers)),
+                ("Firewall", "enable (SSH + web only)" if spec.firewall else "leave unchanged"),
+                (
+                    "Backups",
+                    "every night, the last 7 kept" if spec.daily_backups else "only when you run them",
+                ),
+            ]
+        )
     if spec.repos:
-        rows.append(("Custom repos", "\n".join(f"{r.url} ({r.branch})" for r in spec.repos)))
-    table = Table.grid(padding=(0, 2))
-    for key, value in rows:
-        table.add_row(f"[bold]{key}[/]", value)
-    return Panel(table, title="Install summary", expand=False)
+        groups.append([("Custom repos", "\n".join(escape(f"{r.url} ({r.branch})") for r in spec.repos))])
+    table = Table.grid(padding=(0, 3))
+    for i, rows in enumerate(groups):
+        if i:
+            table.add_row("", "")  # a gap between the groups
+        for key, value in rows:
+            table.add_row(f"[bold cyan]{key}[/]", value)
+    return Panel(
+        table,
+        title="[bold] Install summary [/]",
+        title_align="left",
+        border_style=BRAND,
+        padding=(1, 2),
+        expand=False,
+    )
 
 
-def install_command(spec: InstallSpec) -> str:
-    """The `odoobuddy install` command that repeats this install without questions."""
-    args = ["--purpose", spec.role, "--version", spec.version, "--edition", spec.edition, "--name", spec.name]
-    args += ["--port", str(spec.http_port)]
+def install_command(spec: InstallSpec, *, as_root: bool = False) -> str:
+    """The `odoobuddy install` command that repeats this install without questions, one option per line."""
+    options = [["--purpose", spec.role], ["--version", spec.version], ["--edition", spec.edition]]
+    options += [["--name", spec.name], ["--port", str(spec.http_port)]]
     if spec.mode == "local":
-        args += ["--run-with", spec.ide if spec.ide != "none" else spec.run_mode]
+        options.append(["--run-with", spec.ide if spec.ide != "none" else spec.run_mode])
     else:
-        args += ["--domain", spec.domain] if spec.domain else ["--no-domain"]
+        options.append(["--domain", spec.domain] if spec.domain else ["--no-domain"])
         if spec.domain:
-            args.append("--ssl" if spec.ssl else "--no-ssl")
+            options.append(["--ssl" if spec.ssl else "--no-ssl"])
             if spec.email:
-                args += ["--email", spec.email]
-        args += ["--workers", str(spec.workers)]
-        args.append("--firewall" if spec.firewall else "--no-firewall")
-        args.append("--daily-backups" if spec.daily_backups else "--no-daily-backups")
-    for repo in spec.repos:
-        args += ["--repo", f"{repo.url}#{repo.branch}"]
-    if not spec.repos:
-        args.append("--no-repos")
-    prefix = "sudo -E odoobuddy" if spec.mode == "server" else "odoobuddy"
-    command = f"{prefix} install {shlex.join(args)} --yes"
+                options.append(["--email", spec.email])
+        options.append(["--workers", str(spec.workers)])
+        options.append(["--firewall" if spec.firewall else "--no-firewall"])
+        options.append(["--daily-backups" if spec.daily_backups else "--no-daily-backups"])
+    options += [["--repo", f"{repo.url}#{repo.branch}"] for repo in spec.repos] or [["--no-repos"]]
+    options.append(["--yes"])
+    prefix = "sudo -E odoobuddy" if spec.mode == "server" and not as_root else "odoobuddy"
+    lines = [f"{prefix} install"] + [f"    {shlex.join(option)}" for option in options]
+    command = " \\\n".join(lines)
     if spec.edition == "enterprise":
         command = "export ODOO_GITHUB_TOKEN=...  # your token\n" + command
     return command

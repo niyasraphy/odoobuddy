@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+import shlex
 import urllib.error
 import xml.etree.ElementTree as ET
 
@@ -361,12 +362,19 @@ def test_purpose_defaults_for_old_registries_and_repeat_command(make_instance):
         repos=[RepoSpec("https://github.com/OCA/web.git", "19.0")],
     )  # fmt: skip
     command = ui.install_command(spec)
-    assert command.startswith("export ODOO_GITHUB_TOKEN")
+    assert command.startswith("export ODOO_GITHUB_TOKEN") and " \\\n    --version 19.0 \\\n" in command
+    command = command.replace(" \\\n   ", "")  # one option per line: join them back for the checks below
+    words = shlex.split(command.splitlines()[1])
+    assert words[:5] == ["sudo", "-E", "odoobuddy", "install", "--purpose"] and words[-1] == "--yes"
+    assert ui.install_command(spec, as_root=True).splitlines()[1] == "odoobuddy install \\"
     assert "sudo -E odoobuddy install --purpose production --version 19.0" in command
     assert "--domain erp.example.com --ssl --workers 3 --firewall --daily-backups" in command
     assert "--repo 'https://github.com/OCA/web.git#19.0'" in command and command.endswith("--yes")  # # quoted
     local = ui.install_command(InstallSpec(name="dev", version="18.0", mode="local", purpose="development"))
-    assert local.startswith("odoobuddy install --purpose development") and "--run-with background" in local
+    assert (
+        local.startswith("odoobuddy install \\\n    --purpose development")
+        and "--run-with background" in local
+    )
 
 
 def test_apt_busy_ignores_the_shutdown_helper(tmp_path):
@@ -384,3 +392,13 @@ def test_apt_busy_ignores_the_shutdown_helper(tmp_path):
     assert apt_busy(tmp_path) is None
     process("12", "unattended-upgr", "/usr/bin/python3 /usr/bin/unattended-upgrade")
     assert apt_busy(tmp_path) == "unattended-upgr"
+
+
+def test_buddy_walks_peeks_and_has_coffee():
+    from odoobuddy import ui
+
+    frames = [ui.buddy_frame(t / 4) for t in range(int(ui._CYCLE * 4))]
+    assert all(frames)  # every moment has a frame
+    assert "ᕕ(" in frames[0] and frames[1].count("·") == 1  # walking, one dot per step
+    assert any("coffee break" in f for f in frames) and any("peeking" in f for f in frames)
+    assert ui.buddy_frame(ui._CYCLE) == frames[0]  # and starts over
