@@ -113,10 +113,11 @@ def test_server_with_domain_and_ssl():
         "me@example.com",
         "",
         True,
+        True,
     )
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain == "erp.example.com" and spec.ssl and spec.email == "me@example.com"
-    assert spec.workers == 5 and spec.firewall
+    assert spec.workers == 5 and spec.firewall and spec.daily_backups
     assert any("points to this server" in s for s in p.said)
     assert spec.ide == "none"
 
@@ -125,7 +126,7 @@ SERVER_START = ("server", "19.0", "community", "prod", "8069", False, True, "erp
 
 
 def test_server_dns_not_ready_keep_domain_without_ssl():
-    p = Scripted(*SERVER_START, "keep", False, "3", False)
+    p = Scripted(*SERVER_START, "keep", False, "3", False, False)
     spec = run_wizard(p, make_ctx(is_root=True, public_ip=lambda: "9.9.9.9"))
     assert spec.domain == "erp.example.com"
     assert not spec.ssl and spec.workers == 3 and not spec.firewall
@@ -135,7 +136,7 @@ def test_server_dns_not_ready_keep_domain_without_ssl():
 
 def test_server_dns_check_again_until_it_points_here():
     answers = deque([set(), {"9.9.9.9"}])  # no record, then the record the user just added
-    p = Scripted(*SERVER_START, "check", True, "", "", True)
+    p = Scripted(*SERVER_START, "check", True, "", "", True, True)
     ctx = make_ctx(is_root=True, public_ip=lambda: "9.9.9.9", resolve_domain=lambda d: answers.popleft())
     spec = run_wizard(p, ctx)
     assert spec.domain == "erp.example.com" and spec.ssl
@@ -144,7 +145,7 @@ def test_server_dns_check_again_until_it_points_here():
 
 
 def test_server_dns_not_ready_continue_without_domain():
-    p = Scripted(*SERVER_START, "none", "", True)
+    p = Scripted(*SERVER_START, "none", "", True, True)
     spec = run_wizard(p, make_ctx(is_root=True, resolve_domain=lambda d: set()))
     assert spec.domain is None and not spec.ssl
     assert not any("SSL certificate (HTTPS" in q for q in p.asked)
@@ -163,7 +164,7 @@ def test_dns_preset_domain_only_warns():
 
 
 def test_server_without_domain():
-    p = Scripted("server", "18.0", "community", "prod", "8069", False, False, "", True)
+    p = Scripted("server", "18.0", "community", "prod", "8069", False, False, "", True, False)
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain is None and not spec.ssl
     assert any("SERVER-IP:8069" in s for s in p.said)
@@ -251,7 +252,7 @@ def test_switching_to_server_asks_the_server_questions():
     from odoobuddy.wizard import answers_without
 
     first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "pycharm"), make_ctx())
-    p = Scripted("server", True, "erp.example.com", True, "", "", False)
+    p = Scripted("server", True, "erp.example.com", True, "", "", False, True)
     edited = run_wizard(p, make_ctx(is_root=True, preset=answers_without(first, "mode")))
     assert edited.mode == "server" and edited.domain == "erp.example.com" and edited.ssl
     assert edited.ide == "none" and edited.name == "shop"
@@ -271,7 +272,19 @@ def test_server_email_left_empty_is_not_asked_again():
     from odoobuddy.wizard import answers_without
 
     p = Scripted(
-        "server", "19.0", "community", "prod", "8069", False, True, "erp.example.com", True, "", "", True
+        "server",
+        "19.0",
+        "community",
+        "prod",
+        "8069",
+        False,
+        True,
+        "erp.example.com",
+        True,
+        "",
+        "",
+        True,
+        True,
     )
     first = run_wizard(p, make_ctx(is_root=True))
     assert first.email is None

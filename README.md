@@ -61,6 +61,7 @@ and admin password yourself.
   - a **ufw firewall** that never locks out your SSH port
   - worker counts tuned to your CPU and RAM
   - log rotation
+  - **nightly backups** of every database, the last 7 kept
 - **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
 - **Tab completion** for commands and instance names: `odoobuddy --install-completion`.
 - **Always clear which Odoo you are touching.** Every command shows a banner, production instances are labelled in red, and destructive commands make you type the instance name.
@@ -117,6 +118,7 @@ odoobuddy shell shop           # Odoo shell with `env` (--db to pick a database)
 odoobuddy update shop          # pull latest code + upgrade modules in every database
 odoobuddy pull root@erp.example.com:shop --into shop-dev   # production copy, neutralized
 odoobuddy backup shop          # database + filestore → zip (Odoo's own format)
+odoobuddy backup shop --nightly   # server: back up every database each night, keep 7
 odoobuddy restore backup.zip --name shop --db shop_copy
 odoobuddy remove shop          # asks you to type "shop" to confirm
 

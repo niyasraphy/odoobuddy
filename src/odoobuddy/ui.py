@@ -67,6 +67,7 @@ def summary(spec: InstallSpec) -> Panel:
             ("HTTPS", "Let's Encrypt" if spec.ssl else "no"),
             ("Workers", str(spec.workers)),
             ("Firewall", "enable (SSH + web only)" if spec.firewall else "leave unchanged"),
+            ("Backups", "every night, the last 7 kept" if spec.daily_backups else "only when you run them"),
         ]
     if spec.repos:
         rows.append(("Custom repos", "\n".join(f"{r.url} ({r.branch})" for r in spec.repos)))

@@ -367,6 +367,11 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
         if "firewall" in pre
         else p.confirm("Enable the firewall (only SSH and web traffic allowed)?", default=True)
     )
+    spec.daily_backups = (
+        pre["daily_backups"]
+        if "daily_backups" in pre
+        else p.confirm("Back up every database each night (the last 7 are kept)?", default=True)
+    )
 
 
 def _dns_problem(ctx: WizardContext, domain: str, ip: str | None) -> str | None:
@@ -451,7 +456,7 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
 
 
 # Settings that can be changed from the summary, and the answers each one invalidates.
-_SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall")
+_SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall", "daily_backups")
 EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
     "mode": ("Local or server", ("mode", "ide", "run_mode", "install_editor", *_SERVER_KEYS)),
     "version": ("Odoo version", ("version",)),
@@ -464,6 +469,7 @@ EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
     "ssl": ("SSL certificate", ("ssl", "email")),
     "workers": ("Number of workers", ("workers",)),
     "firewall": ("Firewall", ("firewall",)),
+    "daily_backups": ("Nightly backups", ("daily_backups",)),
 }
 
 
@@ -481,12 +487,13 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
         "ssl": "yes" if spec.ssl else "no",
         "workers": str(spec.workers),
         "firewall": "yes" if spec.firewall else "no",
+        "daily_backups": "yes" if spec.daily_backups else "no",
     }
     keys = ["mode", "version", "edition", "name", "http_port", "repos"]
     keys += (
         ["ide"]
         if spec.mode == "local"
-        else ["domain", *(["ssl"] if spec.domain else []), "workers", "firewall"]
+        else ["domain", *(["ssl"] if spec.domain else []), "workers", "firewall", "daily_backups"]
     )
     return [(k, f"{EDITABLE[k][0]}: {current[k]}") for k in keys]
 
@@ -508,7 +515,9 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
         preset["run_mode"] = spec.run_mode
         preset["install_editor"] = spec.install_editor
     else:
-        preset.update(domain=spec.domain, workers=spec.workers, firewall=spec.firewall)
+        preset.update(
+            domain=spec.domain, workers=spec.workers, firewall=spec.firewall, daily_backups=spec.daily_backups
+        )
         if spec.domain:
             preset.update(ssl=spec.ssl, email=spec.email)
     for dropped in EDITABLE[key][1]:

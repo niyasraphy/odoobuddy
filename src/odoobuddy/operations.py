@@ -7,6 +7,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import zipfile
@@ -14,10 +15,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import postgres, sources
+from . import postgres, render, sources
 from .installer import find_uv
 from .layout import Layout
-from .models import Instance
+from .models import Instance, backup_unit_for
 from .registry import Registry
 from .system import CommandError, Runner, command_exists, is_root, port_in_use, wait_for_port
 
@@ -292,6 +293,52 @@ def backup(runner: Runner, instance: Instance, db: str, dest_dir: Path) -> Path:
     return target
 
 
+BACKUPS_KEPT = 7  # nightly backups: one week
+
+
+def prune_backups(instance: Instance, db: str, dest_dir: Path, keep: int) -> list[Path]:
+    """Delete all but the ``keep`` newest backups of ``db`` in ``dest_dir``; returns the deleted ones."""
+    # Names end in a sortable timestamp: shop_mydb_20261014-023000.zip
+    pattern = f"{instance.name}_{db}_" + "[0-9]" * 8 + "-" + "[0-9]" * 6 + ".zip"
+    old = sorted(dest_dir.glob(pattern))[:-keep] if keep > 0 else []
+    for path in old:
+        path.unlink(missing_ok=True)
+    return old
+
+
+def backup_units(layout: Layout, instance: Instance) -> tuple[Path, Path]:
+    unit = backup_unit_for(instance.name)
+    return layout.systemd_dir / f"{unit}.service", layout.systemd_dir / f"{unit}.timer"
+
+
+def backups_scheduled(layout: Layout, instance: Instance) -> bool:
+    return instance.mode == "server" and backup_units(layout, instance)[1].exists()
+
+
+def schedule_backups(
+    runner: Runner, layout: Layout, instance: Instance, keep: int = BACKUPS_KEPT, dest: Path | None = None
+) -> None:
+    """Back up every database of a server instance each night (systemd timer), keeping ``keep``.
+
+    ``dest``: folder for the zips, if not the default one.
+    """
+    service, timer = backup_units(layout, instance)
+    # This interpreter runs odoobuddy itself, so the timer keeps working without PATH.
+    odoobuddy = [sys.executable, "-m", "odoobuddy"]
+    runner.write_file(service, render.backup_service(instance, odoobuddy, keep, dest))
+    runner.write_file(timer, render.backup_timer(instance))
+    runner.run(["systemctl", "daemon-reload"])
+    runner.run(["systemctl", "enable", "--now", timer.name])
+
+
+def unschedule_backups(runner: Runner, layout: Layout, instance: Instance) -> None:
+    service, timer = backup_units(layout, instance)
+    runner.run(["systemctl", "disable", "--now", timer.name], check=False)
+    _delete(runner, timer)
+    _delete(runner, service)
+    runner.run(["systemctl", "daemon-reload"], check=False)
+
+
 def restore(runner: Runner, instance: Instance, archive: Path, db: str) -> None:
     """Restore ``archive`` into database ``db``, replacing it (and its files) if it exists."""
     if not zipfile.is_zipfile(archive):
@@ -350,6 +397,7 @@ def remove(runner: Runner, registry: Registry, layout: Layout, instance: Instanc
         else:
             runner.run(["ufw", "delete", "allow", f"{instance.http_port}/tcp"], check=False)
         _delete(runner, layout.logrotate_dir / f"odoo-{instance.name}")
+        unschedule_backups(runner, layout, instance)  # the backup zips themselves are kept
     try:
         postgres.drop_role_and_databases(runner, instance.db_user)
     except CommandError as exc:

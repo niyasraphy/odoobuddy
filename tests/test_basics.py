@@ -319,3 +319,31 @@ def test_detect_mode(monkeypatch, env, mode):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     assert detect_mode()[0] == mode
+
+
+def test_backup_unit_name_cannot_clash_with_a_service():
+    from odoobuddy.models import backup_unit_for, service_name_for
+
+    assert backup_unit_for("shop") == "odoobuddy-backup-shop"
+    assert backup_unit_for("shop") != service_name_for("shop-backup")
+
+
+def test_prune_old_logs_keeps_recent_ones_and_other_files(tmp_path):
+    import os
+    import time
+
+    from odoobuddy.system import prune_old_logs
+
+    old, recent, other = (
+        tmp_path / "backup-shop-1.log",
+        tmp_path / "install-shop-2.log",
+        tmp_path / "notes.txt",
+    )
+    for path in (old, recent, other):
+        path.write_text("x")
+    long_ago = time.time() - 31 * 86400
+    for path in (old, other):
+        os.utime(path, (long_ago, long_ago))
+    assert prune_old_logs(tmp_path, 30) == [old]
+    assert recent.exists() and other.exists()
+    assert prune_old_logs(tmp_path / "missing", 30) == []

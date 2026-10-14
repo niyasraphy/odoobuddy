@@ -3,6 +3,18 @@
 ## [0.1.1] - unreleased
 
 ### Fixed
+- Server install on Ubuntu 24.04 failed at "Create Python environment" (`python-ldap`:
+  `Python.h: No such file or directory`): uv picked the system Python 3.12, which has no
+  headers. Instances now always use a uv-managed Python.
+- Servers without a domain showed `http://localhost:PORT` after the install and in `info`,
+  which does not open from your browser. They now show `http://SERVER-IP:PORT` with the
+  server's detected IP.
+- Installs on a freshly booted server no longer fail while Ubuntu's automatic updates hold
+  apt's lock: odoobuddy waits up to 10 minutes and says what it is waiting for.
+- A step that prints nothing for 2 minutes now says it is probably still working, where the
+  full log is, and that Ctrl+C is safe (running the same command again continues).
+- `logs` looked stuck: it now says it is following new lines (Ctrl+C to stop) and warns
+  when the log is missing or empty, with the commands to find out why.
 - Choosing an editor that is not installed now says so, shows how to install it, and offers to check again, use it later, or pick another way to run Odoo (the summary no longer calls it "your installed" editor)
 - Server without a domain: Nginx now serves the public port and routes `/websocket`, so
   live chat and notifications work with multiple workers (Odoo uses internal ports).
@@ -15,6 +27,22 @@
   method, including systemd on servers.
 
 ### Added
+- Nightly backups on servers: the wizard offers them (on by default), and
+  `odoobuddy backup NAME --nightly` / `--no-nightly` turns them on or off later. Every
+  database is backed up around 02:30 and the last 7 are kept, in `/var/backups/odoobuddy/NAME/`.
+  `backup` also gained `--all` (every database) and `--keep N` (delete older backups).
+- odoobuddy's own run logs (`/var/log/odoobuddy/`, `~/.local/share/odoobuddy/logs/`) are
+  deleted after 30 days, so nightly backups do not pile up a log file per night.
+- Before installing, odoobuddy checks free memory and disk space for the new instance and,
+  when they look too small, warns and asks "Install anyway, at your own risk?".
+- The number of workers is limited to what the server's CPU and RAM can run next to its
+  other instances; a larger number is refused.
+- The wizard detects whether it runs on a server (no desktop, e.g. over SSH) or on your
+  computer, and preselects that; Server is listed first.
+- `odoobuddy` alone shows a welcome screen with your instances and the commands to start with.
+- New commands: `status` (running or stopped, and the address) and `support` (documentation,
+  bug reports and contact).
+- `odoobuddy -h`, `odoobuddy help` and `odoobuddy help COMMAND` show the help.
 - Missing editor: the wizard (and `odoobuddy open --with`) can install Zed with its official installer, and VS Code, VSCodium and PyCharm through snap; for others it shows the download link and waits until the editor is installed
 - Server wizard: when the domain does not point to the server yet, shows the DNS record to add and offers to check again, continue without a domain, or keep it and add SSL later
 - "How do you want to run Odoo?": in an editor, in a terminal (`odoobuddy run`) or in
@@ -32,6 +60,10 @@
 - Documentation site, demo GIF, issue and pull request templates, CONTRIBUTING and SECURITY.
 
 ### Changed
+- Server instances live in `/opt/odoo/NAME` (was `/opt/odoobuddy/instances/NAME`). Existing
+  instances keep their folders and keep working.
+- The install wizard starts with `odoobuddy install`; `odoobuddy` alone shows the welcome screen.
+- Yes/no questions wait for Enter, so a mistyped key can be corrected.
 - Colours in the install result and `info`: links (clickable), folders and files, commands to type, keyboard shortcuts, the master password and section headings each have their own colour
 - Installing from a script (no terminal) now requires `--yes`.
 

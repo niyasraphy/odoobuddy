@@ -160,3 +160,44 @@ def test_running_odoo_found_without_pid_file(make_instance, tmp_path):
         (proc / pid).mkdir(parents=True)
         (proc / pid / "cmdline").write_bytes("\0".join(args).encode() + b"\0")
     assert operations._find_odoo_process(inst, proc) == 100
+
+
+def test_nightly_backups_schedule_and_unschedule(layout, make_instance):
+    inst = make_instance("prod", mode="server")
+    runner = RecordingRunner(root=True)
+    operations.schedule_backups(runner, layout, inst, keep=5)
+    service, timer = operations.backup_units(layout, inst)
+    assert service.name == "odoobuddy-backup-prod.service" and timer.name == "odoobuddy-backup-prod.timer"
+    assert "-m odoobuddy backup prod --all --keep 5" in service.read_text()
+    assert "OnCalendar=*-*-* 02:30" in timer.read_text() and "Persistent=true" in timer.read_text()
+    assert "systemctl enable --now odoobuddy-backup-prod.timer" in runner.joined()
+    assert operations.backups_scheduled(layout, inst)
+
+    operations.schedule_backups(runner, layout, inst, keep=5, dest=layout.server_root / "zips")
+    assert service.read_text().count("--to") == 1 and "/zips" in service.read_text()
+
+    operations.unschedule_backups(runner, layout, inst)
+    assert not service.exists() and not timer.exists() and not operations.backups_scheduled(layout, inst)
+    assert "systemctl disable --now odoobuddy-backup-prod.timer" in runner.joined()
+
+
+def test_remove_stops_nightly_backups_but_keeps_the_zips(registry, layout, make_instance, monkeypatch):
+    monkeypatch.setattr(operations, "status", lambda inst: operations.STATUS_STOPPED)
+    inst = make_instance("prod", mode="server")
+    registry.add(inst)
+    runner = RecordingRunner(root=True)
+    operations.schedule_backups(runner, layout, inst)
+    operations.remove(runner, registry, layout, inst)
+    assert not operations.backup_units(layout, inst)[1].exists()
+    assert not any(c.startswith("rm") and "backups" in c for c in runner.joined())
+
+
+def test_prune_backups_keeps_the_newest(tmp_path, make_instance):
+    inst = make_instance("shop")
+    names = [f"shop_main_2026101{day}-023000.zip" for day in range(5)]
+    for name in [*names, "shop_main_copy.zip", "shop_other_20261010-023000.zip"]:
+        (tmp_path / name).write_text("zip")
+    deleted = operations.prune_backups(inst, "main", tmp_path, keep=2)
+    assert [p.name for p in deleted] == names[:3]
+    left = sorted(p.name for p in tmp_path.iterdir())
+    assert left == sorted([*names[3:], "shop_main_copy.zip", "shop_other_20261010-023000.zip"])

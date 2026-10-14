@@ -325,3 +325,30 @@ def test_worker_limit_counts_other_instances(make_instance):
     prod.config_path.write_text("[options]\nworkers = 4\n")
     missing = make_instance("old", mode="server", http_port=8169, gevent_port=8172)  # no config: cron only
     assert processes_in_use([prod, missing, make_instance("shop")]) == 4 + 1 + 1
+
+
+def test_server_install_with_nightly_backups(layout, registry):
+    spec = InstallSpec(name="prod", version="19.0", mode="server", workers=2, daily_backups=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=RecordingRunner(root=True))
+    assert titles(inst)[-2:] == ["Schedule nightly backups", "Register instance"]
+    without = Installer(
+        InstallSpec(name="prod", version="19.0", mode="server", workers=2), layout=layout,
+        registry=registry, runner=RecordingRunner(root=True),
+    )  # fmt: skip
+    assert "Schedule nightly backups" not in titles(without)
+
+
+def test_apt_waits_for_automatic_updates(layout, registry):
+    from odoobuddy.cli import _is_apt_lock_wait
+
+    runner = RecordingRunner(root=True)
+    inst = Installer(
+        InstallSpec(name="shop", version="19.0", mode="local"),
+        layout=layout,
+        registry=registry,
+        runner=runner,
+    )
+    inst.install_system_packages()
+    assert all("-o DPkg::Lock::Timeout=600" in c for c in runner.joined() if "apt-get" in c)
+    assert _is_apt_lock_wait("E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 812")
+    assert not _is_apt_lock_wait("Unpacking nginx (1.24.0)")

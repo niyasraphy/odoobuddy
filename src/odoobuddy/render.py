@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
 
@@ -74,6 +75,41 @@ StandardOutput=journal+console
 
 [Install]
 WantedBy=multi-user.target
+"""
+
+
+def backup_service(instance: Instance, odoobuddy: list[str], keep: int, dest: Path | None = None) -> str:
+    to = ["--to", str(dest)] if dest else []
+    command = shlex.join([*odoobuddy, "backup", instance.name, "--all", "--keep", str(keep), *to])
+    return f"""\
+[Unit]
+Description=Back up every database of Odoo instance {instance.name} - managed by odoobuddy
+Requires=postgresql.service
+After=postgresql.service
+
+[Service]
+Type=oneshot
+ExecStart={command}
+# A backup must not slow Odoo down for its users.
+Nice=10
+IOSchedulingClass=idle
+"""
+
+
+def backup_timer(instance: Instance) -> str:
+    return f"""\
+[Unit]
+Description=Nightly backup of Odoo instance {instance.name} - managed by odoobuddy
+
+[Timer]
+OnCalendar=*-*-* 02:30
+# Spread instances out, so their backups do not all run at the same moment.
+RandomizedDelaySec=30min
+# Run at boot when the server was off at 02:30.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 """
 
 

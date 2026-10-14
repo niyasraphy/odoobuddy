@@ -40,6 +40,9 @@ APT_BASE = [
     "xfonts-base",
 ]
 APT_SERVER = ["nginx", "certbot", "python3-certbot-nginx", "ufw"]
+# A freshly booted server often runs Ubuntu's automatic updates, which hold apt's lock for a
+# few minutes. Wait for them (up to 10 min) instead of failing at once.
+APT_WAIT_FOR_LOCK = ["-o", "DPkg::Lock::Timeout=600"]
 
 WKHTMLTOPDF_RELEASE = "0.12.6.1-3"
 # Odoo needs the "patched Qt" build of wkhtmltopdf. Noble reuses the jammy package.
@@ -235,6 +238,8 @@ class Installer:
             if self.spec.firewall:
                 steps.append(Step("Configure firewall", self.configure_firewall))
             steps.append(Step("Configure log rotation", self.configure_logrotate))
+            if self.spec.daily_backups:
+                steps.append(Step("Schedule nightly backups", self.schedule_backups))
         steps.append(Step("Register instance", self.register))
         return steps
 
@@ -242,7 +247,7 @@ class Installer:
 
     def install_system_packages(self) -> None:
         packages = APT_BASE + (APT_SERVER if self.instance.mode == "server" else [])
-        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get"]
+        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", *APT_WAIT_FOR_LOCK]
         self.runner.run([*apt, "update"], sudo=True)
         self.runner.run([*apt, "install", "-y", "--no-install-recommends", *packages], sudo=True)
 
@@ -252,7 +257,7 @@ class Installer:
         codename = os_release().get("VERSION_CODENAME", "")
         arch = self.runner.run(["dpkg", "--print-architecture"]).stdout.strip() or "amd64"
         url = wkhtmltopdf_url(codename, arch)
-        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install", "-y"]
+        apt = ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", *APT_WAIT_FOR_LOCK, "install", "-y"]
         if url is None:
             # Unknown distribution: fall back to the distro package (works, but no headers/footers).
             self.runner.run([*apt, "wkhtmltopdf"], sudo=True)
@@ -490,6 +495,11 @@ class Installer:
     def configure_logrotate(self) -> None:
         inst = self.instance
         self.runner.write_file(self.layout.logrotate_dir / f"odoo-{inst.name}", render.logrotate(inst))
+
+    def schedule_backups(self) -> None:
+        from . import operations
+
+        operations.schedule_backups(self.runner, self.layout, self.instance)
 
     def register(self) -> None:
         if self.runner.dry_run:

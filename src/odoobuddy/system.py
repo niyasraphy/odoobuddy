@@ -243,6 +243,20 @@ def free_disk_gb(path: Path) -> float:
     return shutil.disk_usage(path).free / 1024**3
 
 
+def prune_old_logs(log_dir: Path, days: int) -> list[Path]:
+    """Delete odoobuddy's own run logs (``*.log`` in ``log_dir``) older than ``days``."""
+    cutoff = time.time() - days * 86400
+    deleted = []
+    try:
+        for path in log_dir.glob("*.log"):
+            if path.is_file() and path.stat().st_mtime < cutoff:
+                path.unlink(missing_ok=True)
+                deleted.append(path)
+    except OSError:
+        pass  # never let tidying up stop the actual command
+    return deleted
+
+
 def detect_mode() -> tuple[Mode, str]:
     """("server" or "local", why): a desktop session means a computer someone works at."""
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):

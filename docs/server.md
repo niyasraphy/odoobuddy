@@ -58,6 +58,7 @@ odoobuddy list                      # all instances and their status
 odoobuddy logs shop                 # follow the log
 odoobuddy restart shop
 odoobuddy backup shop               # database + filestore → zip
+odoobuddy backup shop --nightly     # every database each night, the last 7 kept (--no-nightly stops it)
 odoobuddy update shop               # backup, pull new code, upgrade modules
 ```
 

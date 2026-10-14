@@ -213,3 +213,12 @@ def test_credits_and_support(isolated, monkeypatch):
     support = runner.invoke(app, ["support"])
     assert support.exit_code == 0
     assert "niyasraphyk@gmail.com" in support.output and "/issues" in support.output
+
+
+def test_backup_all_and_nightly(isolated, make_instance, monkeypatch):
+    isolated.add(make_instance("shop"))
+    monkeypatch.setattr("odoobuddy.operations.list_databases", lambda runner, inst: [])
+    empty = runner.invoke(app, ["backup", "shop", "--all", "--keep", "7"])
+    assert empty.exit_code == 0 and "no databases yet" in empty.output
+    local = runner.invoke(app, ["backup", "shop", "--nightly"])
+    assert local.exit_code == 1 and "for server instances" in local.output

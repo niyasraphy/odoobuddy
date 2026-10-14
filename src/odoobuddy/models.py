@@ -47,6 +47,11 @@ def system_user_for(name: str) -> str:
     return f"odoo-{name}"
 
 
+def backup_unit_for(name: str) -> str:
+    # Not "odoo-NAME-backup": that is the service of an instance called "NAME-backup".
+    return f"odoobuddy-backup-{name}"
+
+
 def service_name_for(name: str) -> str:
     return f"odoo-{name}"
 
@@ -78,6 +83,7 @@ class InstallSpec:
     email: str | None = None
     workers: int = 0
     firewall: bool = False
+    daily_backups: bool = False
     repos: list[RepoSpec] = field(default_factory=list)
     github_token: str | None = field(default=None, repr=False)
 

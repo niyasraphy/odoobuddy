@@ -29,7 +29,7 @@ from .installer import (
     worker_limit,
 )
 from .layout import Layout
-from .models import IDE_NAMES, InstallSpec, Instance, RepoSpec
+from .models import IDE_NAMES, InstallSpec, Instance, RepoSpec, backup_unit_for
 from .registry import Registry, RegistryError, resolve
 from .system import (
     CommandError,
@@ -43,6 +43,7 @@ from .system import (
     memory_mb,
     os_release,
     port_in_use,
+    prune_old_logs,
 )
 from .versions import available_versions
 from .wizard import (
@@ -146,8 +147,13 @@ def _confirm_by_typing(instance: Instance, warning: str) -> None:
         raise _fail("name did not match, nothing was changed")
 
 
+LOGS_KEPT_DAYS = 30  # nightly backups write a log each night; older ones are deleted
+
+
 def _runner(dry_run: bool, log_name: str) -> Runner:
     log_dir = Path("/var/log/odoobuddy") if is_root() else _layout().state_dir / "logs"
+    if not dry_run:
+        prune_old_logs(log_dir, LOGS_KEPT_DAYS)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     return Runner(console=console, dry_run=dry_run, log_file=log_dir / f"{log_name}-{stamp}.log")
 
@@ -250,6 +256,9 @@ def install(
     email: Optional[str] = typer.Option(None, help="Server only: email for SSL notices"),
     workers: Optional[int] = typer.Option(None, help="Server only: number of Odoo workers"),
     firewall: Optional[bool] = typer.Option(None, "--firewall/--no-firewall", help="Server only: enable ufw"),
+    daily_backups: Optional[bool] = typer.Option(
+        None, "--daily-backups/--no-daily-backups", help="Server only: back up every database each night"
+    ),
     github_token: Optional[str] = typer.Option(
         None,
         envvar="ODOO_GITHUB_TOKEN",
@@ -282,6 +291,7 @@ def install(
         "email": email,
         "workers": workers,
         "firewall": firewall,
+        "daily_backups": daily_backups,
         "github_token": github_token,
     }.items():
         if value is not None:
@@ -466,22 +476,40 @@ def _duration(seconds: float) -> str:
     return f"{seconds // 60}m {seconds % 60:02d}s" if seconds >= 60 else f"{seconds}s"
 
 
+QUIET_HINT_AFTER = 120  # seconds without output before the spinner explains what to do
+
+
+def _is_apt_lock_wait(line: str) -> bool:
+    return "Could not get lock" in line or "Waiting for cache lock" in line
+
+
 def _progress(title: str, action: Callable[[], object], runner: Runner) -> float:
     """Run ``action`` under a spinner that shows elapsed time and the latest output line."""
-    started = time.monotonic()
+    started = last_output = time.monotonic()
     last_line = ""
     done = threading.Event()
     with console.status(escape(title) + "…") as status:
 
         def refresh() -> None:
-            text = f"{escape(title)}… [dim]{_duration(time.monotonic() - started)}[/dim]"
+            now = time.monotonic()
+            text = f"{escape(title)}… [dim]{_duration(now - started)}[/dim]"
             if last_line:
                 text += f"\n  [dim]{escape(last_line[:110])}[/dim]"
+            if _is_apt_lock_wait(last_line):
+                text += (
+                    "\n  [yellow]Waiting for Ubuntu's automatic updates to finish (usually a few minutes)[/]"
+                )
+            elif now - last_output > QUIET_HINT_AFTER:
+                text += (
+                    f"\n  [yellow]No output for {_duration(now - last_output)}: probably still working.[/] "
+                    f"[dim]Full log:[/] {ui.path(runner.log_file)}\n"
+                    "  [dim]Ctrl+C is safe: run the same command again to continue where it stopped.[/]"
+                )
             status.update(text)
 
         def on_output(line: str) -> None:
-            nonlocal last_line
-            last_line = line
+            nonlocal last_line, last_output
+            last_line, last_output = line, time.monotonic()
             refresh()
 
         def tick() -> None:
@@ -528,6 +556,12 @@ def info(
     rows = [("Status", operations.status(inst)), *ui.instance_details(inst)]
     if inst.mode == "server":
         rows.append(("Domain / SSL", f"{inst.domain or '-'} / {'yes' if inst.ssl else 'no'}"))
+        backups = operations.default_backup_dir(inst)
+        if operations.backups_scheduled(_layout(), inst):
+            rows.append(("Backups", f"every night, in {ui.path(backups)}"))
+        else:
+            turn_on = ui.cmd(f"odoobuddy backup {inst.name} --nightly")
+            rows.append(("Backups", f"not scheduled  [dim](turn on:[/] {turn_on}[dim])[/]"))
     rows.append(("Created", inst.created_at.replace("T", " ").replace("+00:00", " UTC")))
     console.print(ui.details_table(rows))
     help_text = ui.ide_help(inst)
@@ -784,22 +818,72 @@ def update(
 def backup(
     name: Optional[str] = typer.Argument(None, help="Instance name", autocompletion=_complete_names),
     db: Optional[str] = typer.Option(None, "--db", help="Database (asked if the instance has several)"),
+    all_dbs: bool = typer.Option(False, "--all", help="Back up every database of the instance"),
     to: Optional[Path] = typer.Option(None, "--to", help="Folder for the backup zip"),
+    keep: Optional[int] = typer.Option(
+        None, "--keep", min=1, help="Then delete older backups, keeping this many per database"
+    ),
+    nightly: Optional[bool] = typer.Option(
+        None,
+        "--nightly/--no-nightly",
+        help=f"Server: back up every database each night, keeping the last {operations.BACKUPS_KEPT} "
+        "(or --keep); --no-nightly stops it",
+    ),
 ) -> None:
     """Back up a database and its filestore to a zip (Odoo's standard format)."""
     inst = _instance(name)
     _require_root_for(inst, "Backing up")
-    database = _database(inst, db)
-    ui.banner(inst, f"Backup of database '{database}'")
+    dest = to or operations.default_backup_dir(inst)
+    if nightly is not None:
+        _schedule_nightly(inst, nightly, keep or operations.BACKUPS_KEPT, dest, custom_dest=to is not None)
+        return
+    if all_dbs:
+        databases = operations.list_databases(_runner(False, f"db-{inst.name}"), inst)
+        if not databases:
+            console.print(f"{inst.name} has no databases yet: nothing to back up.")
+            return
+    else:
+        databases = [_database(inst, db)]
+    ui.banner(inst, f"Backup of {', '.join(repr(d) for d in databases)} to {dest}")
     runner = _runner(False, f"backup-{inst.name}")
+    failed = []
+    for database in databases:
+        try:
+            path = _with_status(
+                f"Backing up {database}…", lambda d=database: operations.backup(runner, inst, d, dest)
+            )
+        except (CommandError, FileNotFoundError, OSError) as exc:
+            console.print(f"[red]✗ {database}: backup failed: {escape(str(exc))}[/]")
+            failed.append(database)
+            continue
+        console.print(f"[green]✓ Backup saved:[/] {ui.path(path)}")
+        if keep:
+            for old in operations.prune_backups(inst, database, dest, keep):
+                console.print(f"  [dim]deleted old backup {old.name}[/]")
+    if failed:
+        raise typer.Exit(1)
+
+
+def _schedule_nightly(inst: Instance, on: bool, keep: int, dest: Path, *, custom_dest: bool) -> None:
+    if inst.mode != "server":
+        raise _fail("nightly backups are for server instances (they use a systemd timer)")
+    layout = _layout()
+    runner = _runner(False, f"backup-schedule-{inst.name}")
     try:
-        path = _with_status(
-            "Backing up…",
-            lambda: operations.backup(runner, inst, database, to or operations.default_backup_dir(inst)),
+        if on:
+            operations.schedule_backups(runner, layout, inst, keep, dest.resolve() if custom_dest else None)
+        else:
+            operations.unschedule_backups(runner, layout, inst)
+    except CommandError as exc:
+        raise _fail(f"could not change the backup schedule: {exc}") from None
+    if on:
+        console.print(
+            f"[green]✓ Every database of {inst.name} is backed up each night (around 02:30), "
+            f"the last {keep} kept[/] in {ui.path(dest)}\n"
+            f"  [dim]Next run:[/] {ui.cmd('systemctl list-timers ' + backup_unit_for(inst.name) + '.timer')}"
         )
-    except (CommandError, FileNotFoundError) as exc:
-        raise _fail(f"backup failed: {exc}") from None
-    console.print(f"[green]✓ Backup saved:[/] {path}")
+    else:
+        console.print(f"[green]✓ Nightly backups of {inst.name} stopped.[/] Existing backups are kept.")
 
 
 @app.command()
