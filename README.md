@@ -22,7 +22,7 @@ The wizard asks a few questions, then sets up everything:
   ✓ access to odoo/enterprise confirmed
 ? Instance name:                   shop
 ? Which port should Odoo run on?   8069
-? Which IDE do you use?            PyCharm (ready run configuration) - ✓ installed
+? How do you want to run Odoo?     In PyCharm (opens automatically, Odoo runs inside it) - ✓ installed
 
 ✓ [8/10] Test installation (contacts in a temporary database) (1m 12s)
 
@@ -49,7 +49,7 @@ and admin password yourself.
 - **Community or Enterprise.** Your GitHub token is checked *before* cloning. If it doesn't have access, the wizard offers to retry or continues with Community. The token is never saved to disk, git config or logs.
 - **Many instances side by side.** Run Odoo 17, 18, 19 and 20 at the same time, or several instances of one version. Each instance gets its own Python environment, config, database user, ports, filestore and logs.
 - **The right Python for each version**, installed automatically with [uv](https://github.com/astral-sh/uv). Odoo 16 gets 3.10 and Odoo 19 gets 3.12, with no system Python changes.
-- **Local mode** for development: ready-to-debug projects for **VS Code, Cursor, Windsurf, VSCodium** (`F5`) or **PyCharm**, dev mode with auto-reload, and a `start.sh` script. Installed IDEs are detected and pre-selected. Your IDE is never installed or changed; only `.vscode/` or `.idea/` is written in the instance folder.
+- **Local mode** for development: choose how Odoo runs, either **inside your editor** (VS Code, Cursor, Windsurf, VSCodium, PyCharm or Zed), **in a terminal** or **in the background**. With an editor, it opens automatically after the install and Odoo starts inside it, ready to debug. See [Running Odoo locally](#running-odoo-locally).
 - **Server mode** for production:
   - a dedicated system user and a **systemd** service
   - **Nginx** with websocket support, also without a domain: Nginx then serves `http://SERVER-IP:PORT`, so live chat and notifications work with multiple workers
@@ -59,6 +59,32 @@ and admin password yourself.
   - log rotation
 - **Always clear which Odoo you are touching.** Every command shows a banner, production instances are labelled in red, and destructive commands make you type the instance name.
 - **Safe by default.** `--dry-run` everywhere, a backup before production updates, generated passwords, and SQL and passwords passed on stdin, never on the command line.
+
+## Running Odoo locally
+
+The wizard asks **"How do you want to run Odoo?"** and lists the editors installed on your
+computer first. Editors are never installed or changed: only a project folder (`.vscode/`,
+`.idea/` or `.zed/`) is written inside the instance.
+
+| Choice | After the install | Debugging |
+|---|---|---|
+| **VS Code, Cursor, Windsurf, VSCodium** | The editor opens, and Odoo **starts by itself** in its terminal panel. The first time, trust the folder and allow automatic tasks. | *Run and Debug* → **"Attach to Odoo"** → F5, at any time, without restarting |
+| **PyCharm** | PyCharm opens, and Odoo **starts by itself** (PyCharm *Startup Tasks*). The first time, click *Trust Project*. | Stop it, then click **Debug** 🐞 |
+| **Zed** | Zed opens; start Odoo with *task: spawn* → "Odoo: run NAME" (Zed can't auto-start tasks) | *debugger: start* → **"Attach to Odoo"** |
+| **Terminal** | Run `odoobuddy run NAME`: live logs, and Ctrl+C stops it | Any editor can still "Attach to Odoo" |
+| **Background** | Odoo is started for you; use `odoobuddy start / stop / logs NAME` | Any editor can still "Attach to Odoo" |
+
+"Attach to Odoo" keeps working after Odoo reloads itself when you change Python code.
+Each instance has its own debug port (web port + 20000, e.g. 8069 → 28069), so several
+instances can be debugged side by side.
+
+Switch or reopen an editor at any time:
+
+```bash
+odoobuddy open shop                 # open its editor again
+odoobuddy open shop --with zed      # switch to another editor
+odoobuddy run shop                  # or just run it in this terminal
+```
 
 ## Requirements
 
@@ -73,7 +99,9 @@ odoobuddy list                 # all instances, versions, ports and status
 odoobuddy info shop            # paths, ports, database, source code
 odoobuddy use shop             # set the "current" instance
 
-odoobuddy start|stop|restart shop
+odoobuddy run shop                 # run in this terminal (Ctrl+C stops it)
+odoobuddy open shop                # open in its editor (Odoo starts inside it)
+odoobuddy start|stop|restart shop  # run in the background
 odoobuddy logs shop            # follow the log (-n 500 --no-follow also work)
 odoobuddy shell shop           # Odoo shell with `env` (--db to pick a database)
 
@@ -113,7 +141,7 @@ Everything about an instance lives in **one folder**:
 ├── logs/odoo.log                 ← log                            (server: /var/log/odoo/<name>.log)
 ├── backups/                      ← backup zips                    (server: /var/backups/odoobuddy/<name>/)
 ├── start.sh                      ← run in the terminal (local)
-├── .idea/  or  .vscode/          ← PyCharm or VS Code project (local)
+├── .vscode/ .idea/ or .zed/       ← editor project (local)
 └── .odoobuddy                ← marks the folder, so commands know which instance you're in
 ```
 

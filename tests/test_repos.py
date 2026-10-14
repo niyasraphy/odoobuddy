@@ -130,7 +130,7 @@ def test_wizard_collects_repos_and_asks_token_for_private_ones():
         "https://github.com/acme/private.git", "17.0", "tok",
         "https://github.com/acme/missing.git", "",
         "",                                                # empty URL: done
-        "none",
+        "background",
     )  # fmt: skip
     spec = run(p, make_ctx(check_repo=check))
     assert spec.repos == [

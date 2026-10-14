@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.1] - 2026-10-14
+## [0.1.1] - unreleased
 
 ### Fixed
 - Server without a domain: Nginx now serves the public port and routes `/websocket`, so
@@ -9,10 +9,18 @@
   log file, and the installer checks that the service really answers after starting.
 - A running local instance is detected by its config file when the pid file is missing.
 - Odoo 20: install `markdown2`, which Odoo uses but does not list in its requirements.
+- Odoo crashed after reloading itself (dev-mode reload, module installs) when its virtual
+  environment was not activated: it restarted with the system Python. Fixed for every launch
+  method, including systemd on servers.
 
 ### Added
-- Cursor, Windsurf and VSCodium support (same F5 debugging as VS Code), detected
-  automatically like VS Code and PyCharm.
+- "How do you want to run Odoo?": in an editor, in a terminal (`odoobuddy run`) or in
+  the background. Editors open automatically after the install and Odoo starts inside
+  them (VS Code family and PyCharm automatically, Zed with one command).
+- "Attach to Odoo": attach a debugger to the running Odoo at any time, also after it
+  reloads itself; each instance has its own debug port.
+- Editors: Cursor, Windsurf, VSCodium and Zed, detected automatically.
+- New commands: `run` (foreground in this terminal) and `open` (open or switch editor).
 
 ## [0.1.0] - 2026-10-13
 

@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import postgres, render, sources
 from .layout import Layout
-from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance, db_role_for
+from .models import IDE_NAMES, InstallSpec, Instance, db_role_for
 from .postgres import client_env, read_db_settings
 from .registry import MARKER_FILE, Registry
 from .system import CommandError, Runner, command_exists, os_release, ssh_port, wait_for_port
@@ -139,6 +139,7 @@ class Installer:
             domain=spec.domain if spec.mode == "server" else None,
             ssl=spec.ssl and spec.mode == "server" and bool(spec.domain),
             ide=spec.ide if spec.mode == "local" else "none",
+            run_mode=spec.run_mode if spec.mode == "local" else "background",
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
         )
 
@@ -247,6 +248,9 @@ class Installer:
             ],
             env=env,
         )
+        from . import editors
+
+        editors.install_debug_hook(self.runner, inst)  # also needed on servers: see DEBUG_HOOK
 
     def create_db_role(self) -> None:
         postgres.ensure_role(self.runner, self.instance.db_user, self.credentials.db_password)
@@ -344,26 +348,9 @@ class Installer:
         shutil.rmtree(inst.data_dir / "filestore" / self.check_db, ignore_errors=True)
 
     def configure_ide(self) -> None:
-        inst = self.instance
-        if inst.ide in VSCODE_FAMILY:
-            vscode = inst.instance_dir / ".vscode"
-            self.runner.write_file(vscode / "launch.json", render.vscode_launch(inst))
-            self.runner.write_file(vscode / "settings.json", render.vscode_settings(inst))
-            self.runner.write_file(vscode / "extensions.json", render.vscode_extensions())
-        elif inst.ide == "pycharm":
-            idea = inst.instance_dir / ".idea"
-            self.runner.write_file(
-                idea / "runConfigurations" / f"Odoo_{inst.name.replace('-', '_')}.xml",
-                render.pycharm_run_config(inst),
-            )
-            # Project files: written once, never overwriting settings PyCharm or the user changed.
-            for filename, content in (
-                (f"{inst.name}.iml", render.pycharm_module(inst)),
-                ("modules.xml", render.pycharm_modules(inst)),
-                ("misc.xml", render.pycharm_misc(inst)),
-            ):
-                if not (idea / filename).exists() or self.runner.dry_run:
-                    self.runner.write_file(idea / filename, content)
+        from . import editors
+
+        editors.configure(self.runner, self.instance)
 
     def install_service(self) -> None:
         inst = self.instance

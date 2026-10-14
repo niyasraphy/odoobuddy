@@ -102,6 +102,7 @@ def start(runner: Runner, instance: Instance, *, wait: float = 30) -> bool:
         instance.log_path.parent.mkdir(parents=True, exist_ok=True)
         subprocess.Popen(
             _odoo(instance, f"--logfile={instance.log_path}", f"--pidfile={instance.pid_file}"),
+            env={**os.environ, "ODOOBUDDY_DEBUG_PORT": str(instance.debug_port)},  # editors can attach
             cwd=instance.instance_dir,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -163,6 +164,11 @@ def list_databases(runner: Runner, instance: Instance) -> list[str]:
     )
     check_db = f"{instance.db_user}_install_check"
     return [line.strip() for line in result.stdout.splitlines() if line.strip() and line.strip() != check_db]
+
+
+def run_command(instance: Instance) -> tuple[list[str], dict[str, str]]:
+    """Run Odoo in the foreground of this terminal; an editor can still attach a debugger."""
+    return _odoo(instance), {**os.environ, "ODOOBUDDY_DEBUG_PORT": str(instance.debug_port)}
 
 
 def shell_command(instance: Instance, db: str) -> list[str]:

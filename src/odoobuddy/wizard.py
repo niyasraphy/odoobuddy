@@ -11,6 +11,7 @@ from typing import Any, Protocol, cast
 
 from .models import (
     BACKEND_OFFSET,
+    DEBUG_OFFSET,
     IDE_NAMES,
     Edition,
     Ide,
@@ -18,6 +19,7 @@ from .models import (
     Instance,
     Mode,
     RepoSpec,
+    RunMode,
     validate_name,
 )
 from .ports import check_port, gevent_port_for, suggest_ports
@@ -246,26 +248,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     spec.repos = pre["repos"] if "repos" in pre else _repo_questions(p, ctx, version)
 
     if mode == "local":
-        installed = ctx.installed_ides
-
-        def label(ide: str) -> str:
-            hint = "ready run configuration" if ide == "pycharm" else "debug with F5"
-            text = f"{IDE_NAMES[ide]} ({hint})"
-            if ide not in installed:
-                return text
-            return f"{text} - {'✓ installed' if installed[ide] else 'not found on this computer'}"
-
-        # Installed editors first, so the likely answer is at the top.
-        order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
-        default_ide = next((i for i in order if installed.get(i)), "vscode")
-        spec.ide = pre.get("ide") or cast(
-            Ide,
-            p.select(
-                "Which IDE do you use? (it is not installed or changed, only configured)",
-                [(i, label(i)) for i in order] + [("none", "None / other (I'll use ./start.sh)")],
-                default=default_ide,
-            ),
-        )
+        _run_question(p, ctx, spec)
         return spec
 
     _server_questions(p, ctx, spec)
@@ -379,12 +362,12 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
 # Settings that can be changed from the summary, and the answers each one invalidates.
 _SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall")
 EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
-    "mode": ("Local or server", ("mode", "ide", *_SERVER_KEYS)),
+    "mode": ("Local or server", ("mode", "ide", "run_mode", *_SERVER_KEYS)),
     "version": ("Odoo version", ("version",)),
     "edition": ("Edition (Community / Enterprise)", ("edition", "github_token")),
     "name": ("Instance name", ("name",)),
     "http_port": ("Port", ("http_port",)),
-    "ide": ("IDE", ("ide",)),
+    "ide": ("How Odoo runs", ("ide", "run_mode")),
     "repos": ("Custom repositories", ("repos",)),
     "domain": ("Domain name", ("domain", "ssl", "email")),
     "ssl": ("SSL certificate", ("ssl", "email")),
@@ -401,7 +384,7 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
         "edition": spec.edition,
         "name": spec.name,
         "http_port": str(spec.http_port),
-        "ide": spec.ide,
+        "ide": IDE_NAMES.get(spec.ide, spec.run_mode),
         "repos": f"{len(spec.repos)} selected",
         "domain": spec.domain or "none",
         "ssl": "yes" if spec.ssl else "no",
@@ -431,6 +414,7 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
         preset["github_token"] = spec.github_token
     if spec.mode == "local":
         preset["ide"] = spec.ide
+        preset["run_mode"] = spec.run_mode
     else:
         preset.update(domain=spec.domain, workers=spec.workers, firewall=spec.firewall)
         if spec.domain:
@@ -438,3 +422,47 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
     for dropped in EDITABLE[key][1]:
         preset.pop(dropped, None)
     return preset
+
+
+def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
+    """Local only: open in an editor (Odoo runs inside it), or run in a terminal / background."""
+    pre = ctx.preset
+    if "ide" in pre or "run_mode" in pre:
+        spec.ide = pre.get("ide", "none")
+        spec.run_mode = pre.get("run_mode") or ("editor" if spec.ide != "none" else "background")
+        _check_debug_port(ctx, spec)
+        return
+    installed = ctx.installed_ides
+
+    def label(ide: str) -> str:
+        text = f"In {IDE_NAMES[ide]} (opens automatically, Odoo runs inside it)"
+        if ide not in installed:
+            return text
+        return f"{text} - {'✓ installed' if installed[ide] else 'not found on this computer'}"
+
+    # Installed editors first, so the likely answer is at the top.
+    order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
+    default = next((i for i in order if installed.get(i)), "terminal")
+    choice = p.select(
+        "How do you want to run Odoo? (editors are not installed or changed, only configured)",
+        [(i, label(i)) for i in order]
+        + [
+            ("terminal", f"In a terminal, no editor (odoobuddy run {spec.name})"),
+            ("background", f"In the background (odoobuddy start / stop / logs {spec.name})"),
+        ],
+        default=default,
+    )
+    if choice in IDE_NAMES:
+        spec.ide, spec.run_mode = cast(Ide, choice), "editor"
+    else:
+        spec.ide, spec.run_mode = "none", cast(RunMode, choice)
+    _check_debug_port(ctx, spec)
+
+
+def _check_debug_port(ctx: WizardContext, spec: InstallSpec) -> None:
+    port = spec.http_port + DEBUG_OFFSET
+    if port > 65535 or ctx.port_in_use(port):
+        raise WizardAbort(
+            f"the debugger needs port {port} (your port + {DEBUG_OFFSET}), which is not free; "
+            "choose another port"
+        )

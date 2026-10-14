@@ -151,7 +151,15 @@ def vscode_launch(instance: Instance) -> str:
         "version": "0.2.0",
         "configurations": [
             {
-                "name": f"Odoo {instance.version} ({instance.name})",
+                # Odoo already runs (started by the folder-open task): attach without restarting.
+                "name": f"Attach to Odoo ({instance.name})",
+                "type": "debugpy",
+                "request": "attach",
+                "connect": {"host": "127.0.0.1", "port": instance.debug_port},
+                "justMyCode": False,
+            },
+            {
+                "name": f"Debug Odoo from start ({instance.name}) - stop the running task first",
                 "type": "debugpy",
                 "request": "launch",
                 "program": str(instance.odoo_bin),
@@ -181,6 +189,8 @@ def vscode_settings(instance: Instance) -> str:
         "python.analysis.extraPaths": [str(instance.community_dir)] + [str(p) for p in addons_path(instance)],
         "files.exclude": {"venv": True, "data": True, "**/__pycache__": True},
         "search.exclude": {"venv": True, "data": True},
+        # Start Odoo when the folder opens (the editor may still ask once for permission).
+        "task.allowAutomaticTasks": "on",
     }
     return json.dumps(settings, indent=4) + "\n"
 
@@ -274,5 +284,143 @@ def start_script(instance: Instance) -> str:
 #!/bin/sh
 # Run Odoo "{instance.name}" in the foreground (Ctrl+C to stop). Extra args are passed on,
 # e.g.  ./start.sh -u my_module
+# An editor can attach a debugger on port {instance.debug_port} ("Attach to Odoo").
+export ODOOBUDDY_DEBUG_PORT={instance.debug_port}
 exec {instance.python_bin} {instance.odoo_bin} -c {instance.config_path} "$@"
 """
+
+
+def vscode_tasks(instance: Instance) -> str:
+    """Start Odoo in the editor's terminal as soon as the folder is opened."""
+    task = {
+        "label": f"Odoo: run {instance.name}",
+        "type": "process",
+        "command": str(instance.python_bin),
+        "args": [str(instance.odoo_bin), "-c", str(instance.config_path)],
+        "options": {
+            "cwd": str(instance.instance_dir),
+            "env": {"ODOOBUDDY_DEBUG_PORT": str(instance.debug_port)},
+        },
+        "isBackground": True,
+        "problemMatcher": [],
+        "runOptions": {"runOn": "folderOpen", "instanceLimit": 1},
+        "presentation": {"reveal": "always", "panel": "dedicated", "clear": True},
+    }
+    return json.dumps({"version": "2.0.0", "tasks": [task]}, indent=4) + "\n"
+
+
+def pycharm_startup(instance: Instance) -> str:
+    """PyCharm "Startup Tasks" (Settings > Tools > Startup Tasks): run Odoo when the project opens."""
+    name = f"Odoo {instance.version} ({instance.name})"
+    return f"""\
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectStartupSharedConfiguration">
+    <configurations>
+      <configuration id={quoteattr("Python." + name)} name={quoteattr(name)} />
+    </configurations>
+  </component>
+</project>
+"""
+
+
+def zed_tasks(instance: Instance) -> str:
+    task = {
+        "label": f"Odoo: run {instance.name}",
+        "command": str(instance.python_bin),
+        "args": [str(instance.odoo_bin), "-c", str(instance.config_path)],
+        "cwd": str(instance.instance_dir),
+        "env": {"ODOOBUDDY_DEBUG_PORT": str(instance.debug_port)},
+        "use_new_terminal": False,
+        "allow_concurrent_runs": False,
+        "reveal": "always",
+    }
+    return json.dumps([task], indent=2) + "\n"
+
+
+def zed_debug(instance: Instance) -> str:
+    configs = [
+        {
+            "label": f"Attach to Odoo ({instance.name})",
+            "adapter": "Debugpy",
+            "request": "attach",
+            "connect": {"host": "127.0.0.1", "port": instance.debug_port},
+            "justMyCode": False,
+        },
+        {
+            "label": f"Debug Odoo from start ({instance.name})",
+            "adapter": "Debugpy",
+            "request": "launch",
+            "program": str(instance.odoo_bin),
+            "args": ["-c", str(instance.config_path)],
+            "cwd": str(instance.instance_dir),
+            "python": str(instance.python_bin),
+            "justMyCode": False,
+        },
+    ]
+    return json.dumps(configs, indent=2) + "\n"
+
+
+def zed_settings(instance: Instance) -> str:
+    settings = {
+        "file_scan_exclusions": ["**/.git", "**/__pycache__", "venv", "data"],
+        "languages": {"Python": {"language_servers": ["pyright", "..."]}},
+        "lsp": {
+            "pyright": {
+                "settings": {
+                    "python": {"pythonPath": str(instance.python_bin)},
+                    "python.analysis": {
+                        "extraPaths": [str(instance.community_dir)] + [str(p) for p in addons_path(instance)]
+                    },
+                }
+            }
+        },
+    }
+    return json.dumps(settings, indent=2) + "\n"
+
+
+# Imported at Python start-up (via a .pth file in the instance's venv) for odoo-bin only:
+# 1. Odoo restarts itself (dev-mode reload, module installs) by exec'ing plain "python", which
+#    is looked up on PATH - outside an activated venv that is the *system* Python, so the
+#    restarted Odoo crashes with missing packages. Putting the venv's bin/ first fixes that.
+# 2. With ODOOBUDDY_DEBUG_PORT set, Odoo listens for debuggers there - again after every
+#    restart, which a normal debug launch cannot survive.
+DEBUG_HOOK = '''"""Added by odoobuddy: keeps Odoo's self-restart inside this venv and lets
+an editor attach a debugger to a running Odoo."""
+
+import os
+import sys
+
+
+def _is_odoo_server():
+    if not sys.argv or not sys.argv[0].endswith("odoo-bin"):
+        return False
+    return not (len(sys.argv) > 1 and sys.argv[1] == "shell")
+
+
+def _use_this_python_on_restart():
+    bindir = os.path.dirname(sys.executable)
+    paths = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and p != bindir]
+    os.environ["PATH"] = os.pathsep.join([bindir, *paths])
+    os.environ["VIRTUAL_ENV"] = sys.prefix
+
+
+def _listen():
+    port = os.environ.get("ODOOBUDDY_DEBUG_PORT")
+    if not port:
+        return
+    os.environ.setdefault("PYDEVD_DISABLE_FILE_VALIDATION", "1")
+    try:
+        import debugpy
+
+        debugpy.configure(subProcess=False)  # Odoo re-execs itself; this hook re-attaches instead
+        debugpy.listen(("127.0.0.1", int(port)))
+    except Exception as exc:  # never stop Odoo from starting
+        sys.stderr.write(f"odoobuddy: debugger not available on port {port}: {exc}\\n")
+
+
+if _is_odoo_server():
+    _use_this_python_on_restart()
+    _listen()
+'''
+DEBUG_HOOK_PTH = "import _odoobuddy_debug\n"

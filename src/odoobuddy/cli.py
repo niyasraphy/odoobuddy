@@ -16,7 +16,7 @@ from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 
-from . import __version__, operations, repos, sources, ui
+from . import __version__, editors, operations, repos, sources, ui
 from .ide import detect_ides
 from .installer import CHECK_MODULE, Installer, suggested_workers
 from .layout import Layout
@@ -160,7 +160,12 @@ def install(
     edition: Optional[str] = typer.Option(None, help="community or enterprise"),
     mode: Optional[str] = typer.Option(None, help="local or server"),
     port: Optional[int] = typer.Option(None, help="Web port (websocket port is chosen automatically)"),
-    ide: Optional[str] = typer.Option(None, help="Local only: vscode, pycharm or none"),
+    run_with: Optional[str] = typer.Option(
+        None,
+        "--run-with",
+        help="Local only: vscode, cursor, windsurf, vscodium, pycharm, zed, terminal or background",
+    ),
+    ide: Optional[str] = typer.Option(None, hidden=True, help="Old name of --run-with (none = background)"),
     domain: Optional[str] = typer.Option(None, help="Server only: domain name, e.g. erp.example.com"),
     no_domain: bool = typer.Option(False, "--no-domain", help="Server only: no domain (no Nginx/SSL)"),
     ssl: Optional[bool] = typer.Option(None, "--ssl/--no-ssl", help="Server only: Let's Encrypt HTTPS"),
@@ -195,7 +200,6 @@ def install(
         "edition": edition,
         "mode": mode,
         "http_port": port,
-        "ide": ide,
         "ssl": ssl,
         "email": email,
         "workers": workers,
@@ -208,6 +212,14 @@ def install(
         preset["domain"] = domain
     elif no_domain:
         preset["domain"] = None
+    choice = run_with or ide
+    if choice is not None:
+        if choice in IDE_NAMES:
+            preset.update(ide=choice, run_mode="editor")
+        elif choice in ("terminal", "background", "none"):
+            preset.update(ide="none", run_mode="background" if choice == "none" else choice)
+        else:
+            raise _fail(f"--run-with must be one of: {', '.join([*IDE_NAMES, 'terminal', 'background'])}")
     if repo or no_repos:
         preset["repos"] = [
             RepoSpec(url=r.split("#", 1)[0], branch=r.split("#", 1)[1] if "#" in r else (odoo_version or ""))
@@ -218,7 +230,6 @@ def install(
     for key, allowed in (
         ("edition", {"community", "enterprise"}),
         ("mode", {"local", "server"}),
-        ("ide", {*IDE_NAMES, "none"}),
     ):
         if key in preset and preset[key] not in allowed:
             raise _fail(f"--{key} must be one of: {', '.join(sorted(allowed))}")
@@ -302,14 +313,14 @@ def install(
         console.print("\n[yellow]Dry run: nothing was changed.[/yellow]")
         return
     inst = installer.instance
-    if inst.mode == "local":
-        _progress("Starting Odoo", lambda: operations.start(runner, inst), runner)
+    after = _after_install(runner, inst)
     for warning in installer.warnings:
         console.print(f"[yellow]⚠ {warning}[/yellow]")
     creds = installer.credentials
     first_db = (
         "[bold]Create your first database[/]\n"
-        f"  1. Open {inst.url}/web/database/manager\n"
+        f"  1. {'Once Odoo is running, open' if inst.run_mode != 'background' else 'Open'} "
+        f"{inst.url}/web/database/manager\n"
         f"  2. Master password: [bold]{creds.master_password}[/]\n"
         "  3. Choose the database name, language, country, demo data and admin password\n"
         f"  [dim](the master password is also saved as admin_passwd in {inst.config_path})[/]"
@@ -325,9 +336,31 @@ def install(
     if help_text:
         body = Group(body, "", help_text.rstrip())
     console.print(Panel(body, title=inst.label, expand=False))
+    if after:
+        console.print(after)
     console.print(
         f"[dim]Manage it: odoobuddy start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
     )
+
+
+def _after_install(runner: Runner, inst: Instance) -> str:
+    """Start Odoo the way the user chose. Returns a line to show under the summary."""
+    if inst.mode == "server":
+        return ""
+    if inst.run_mode == "background":
+        ok = _progress("Starting Odoo in the background", lambda: operations.start(runner, inst), runner)
+        return "" if ok else f"[yellow]⚠ Odoo did not answer yet, check: odoobuddy logs {inst.name}[/]"
+    if inst.run_mode == "terminal":
+        return f"[bold]Start Odoo now:[/] odoobuddy run {inst.name}   [dim](Ctrl+C stops it)[/]"
+    name = IDE_NAMES[inst.ide]
+    try:
+        editors.open_editor(inst)
+    except RuntimeError as exc:
+        return (
+            f"[yellow]⚠ Could not open {name} ({exc}).[/] Open it yourself: "
+            f"[bold]{escape(editors.manual_open_hint(inst))}[/]"
+        )
+    return f"[green]✓ Opened {name}[/] — Odoo runs inside it (see the steps above)."
 
 
 def _duration(seconds: float) -> str:
@@ -449,6 +482,60 @@ def restart(name: Optional[str] = typer.Argument(None, help="Instance name")) ->
     if not ok:
         raise _fail(f"Odoo did not come back. Check: odoobuddy logs {inst.name}")
     console.print(f"[green]✓ Running:[/] {inst.url}")
+
+
+@app.command("run")
+def run_foreground(name: Optional[str] = typer.Argument(None, help="Instance name")) -> None:
+    """Run Odoo in this terminal with live logs (Ctrl+C stops it). No editor needed."""
+    inst = _instance(name)
+    if inst.mode == "server":
+        raise _fail(f"server instances run as a service: odoobuddy start|logs {inst.name}")
+    if operations.status(inst) == operations.STATUS_RUNNING:
+        raise _fail(
+            f"{inst.name} is already running (in the background or an editor). "
+            f"Stop it first: odoobuddy stop {inst.name}"
+        )
+    ui.banner(
+        inst,
+        f"Running in this terminal on {inst.url}  —  Ctrl+C to stop\n"
+        f'Debugger can attach on port {inst.debug_port} ("Attach to Odoo")',
+    )
+    cmd, env = operations.run_command(inst)
+    os.chdir(inst.instance_dir)
+    os.execvpe(cmd[0], cmd, env)
+
+
+@app.command("open")
+def open_in_editor(
+    name: Optional[str] = typer.Argument(None, help="Instance name"),
+    with_editor: Optional[str] = typer.Option(
+        None, "--with", help="Use (and configure) another editor: " + ", ".join(IDE_NAMES)
+    ),
+) -> None:
+    """Open the instance in its editor; Odoo starts inside the editor."""
+    inst = _instance(name)
+    if inst.mode == "server":
+        raise _fail("editors are for local instances")
+    if with_editor is not None:
+        if with_editor not in IDE_NAMES:
+            raise _fail(f"--with must be one of: {', '.join(IDE_NAMES)}")
+        inst.ide, inst.run_mode = with_editor, "editor"  # type: ignore[assignment]
+        editors.configure(_runner(False, f"open-{inst.name}"), inst)
+        _registry().update(inst)
+    if inst.ide not in IDE_NAMES:
+        raise _fail(f"{inst.name} has no editor yet, choose one: odoobuddy open {inst.name} --with vscode")
+    ui.banner(inst, f"Opening in {IDE_NAMES[inst.ide]}")
+    if operations.status(inst) == operations.STATUS_RUNNING:
+        console.print("[yellow]Odoo is already running, so the editor could not start it (same port).[/]")
+        if sys.stdin.isatty() and typer.confirm("Stop the running Odoo first?", default=True):
+            runner = _runner(False, f"stop-{inst.name}")
+            with SudoSession(runner):
+                operations.stop(runner, inst)
+    try:
+        editors.open_editor(inst)
+    except RuntimeError as exc:
+        raise _fail(f"could not open the editor ({exc}). Run: {editors.manual_open_hint(inst)}") from None
+    console.print(f"[green]✓ Opened {IDE_NAMES[inst.ide]}[/]\n" + ui.ide_help(inst).rstrip())
 
 
 @app.command()
@@ -690,6 +777,8 @@ def versions() -> None:
 
 # Commands that take the instance as their first argument, and ones that take --instance.
 _NAME_FIRST = {
+    "run",
+    "open",
     "info",
     "use",
     "start",

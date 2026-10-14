@@ -14,6 +14,7 @@ _COMMANDS = {
     "windsurf": ["windsurf"],
     "vscodium": ["codium"],
     "pycharm": ["pycharm", "pycharm-community", "pycharm-professional", "charm"],
+    "zed": ["zed", "zeditor", "zedit"],
 }
 _PATTERNS = {
     "vscode": [
@@ -47,6 +48,12 @@ _PATTERNS = {
         "/var/lib/flatpak/exports/bin/com.jetbrains.PyCharm-*",
         "~/.local/share/flatpak/exports/bin/com.jetbrains.PyCharm-*",
     ],
+    "zed": [
+        "~/.local/bin/zed",
+        "~/.local/zed.app/bin/zed",
+        "/var/lib/flatpak/exports/bin/dev.zed.Zed",
+        "~/.local/share/flatpak/exports/bin/dev.zed.Zed",
+    ],
 }
 
 
@@ -64,6 +71,7 @@ _DESKTOP_FILES = {
     "windsurf": ["windsurf.desktop"],
     "vscodium": ["codium.desktop", "codium_codium.desktop", "com.vscodium.codium.desktop"],
     "pycharm": ["jetbrains-pycharm*.desktop", "pycharm*.desktop", "com.jetbrains.PyCharm*.desktop"],
+    "zed": ["dev.zed.Zed.desktop", "zed.desktop"],
 }
 
 

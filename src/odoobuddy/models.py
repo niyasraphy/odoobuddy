@@ -9,7 +9,9 @@ from typing import Any, Literal
 
 Mode = Literal["local", "server"]
 Edition = Literal["community", "enterprise"]
-Ide = Literal["vscode", "cursor", "windsurf", "vscodium", "pycharm", "none"]
+Ide = Literal["vscode", "cursor", "windsurf", "vscodium", "pycharm", "zed", "none"]
+# Local only: open in an editor (Odoo runs inside it), run in a terminal, or in the background.
+RunMode = Literal["editor", "terminal", "background"]
 
 # Display names, in the order the wizard offers them.
 IDE_NAMES: dict[str, str] = {
@@ -18,11 +20,14 @@ IDE_NAMES: dict[str, str] = {
     "windsurf": "Windsurf",
     "vscodium": "VSCodium",
     "pycharm": "PyCharm",
+    "zed": "Zed",
 }
 # Editors built on VS Code read the same .vscode/launch.json and settings.json.
 VSCODE_FAMILY = frozenset({"vscode", "cursor", "windsurf", "vscodium"})
 
 BACKEND_OFFSET = 10000
+# Local instances: an editor can attach a debugger on http_port + DEBUG_OFFSET (8069 -> 28069).
+DEBUG_OFFSET = 20000
 
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,30}")
 
@@ -66,6 +71,7 @@ class InstallSpec:
     http_port: int = 8069
     gevent_port: int = 8072
     ide: Ide = "none"
+    run_mode: RunMode = "background"
     domain: str | None = None
     ssl: bool = False
     email: str | None = None
@@ -97,6 +103,7 @@ class Instance:
     domain: str | None = None
     ssl: bool = False
     ide: Ide = "none"
+    run_mode: RunMode = "background"
     created_at: str = ""
 
     @property
@@ -117,6 +124,10 @@ class Instance:
     @property
     def backend_gevent_port(self) -> int:
         return self.gevent_port + BACKEND_OFFSET if self.nginx_on_public_port else self.gevent_port
+
+    @property
+    def debug_port(self) -> int:
+        return self.http_port + DEBUG_OFFSET
 
     @property
     def custom_dir(self) -> Path:

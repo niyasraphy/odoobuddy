@@ -8,7 +8,6 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .ide import find_ide
 from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
@@ -116,30 +115,49 @@ def instance_details(instance: Instance) -> list[tuple[str, str]]:
 
 
 def ide_help(instance: Instance) -> str:
+    """How to run and debug this local instance, for its editor or run mode."""
+    if instance.mode != "local":
+        return ""
     folder = _home(instance.instance_dir)
-    stop_first = f"  First stop the background copy (same port): [bold]odoobuddy stop {instance.name}[/]\n"
-    launcher = find_ide(instance.ide) if instance.ide != "none" else None
-    open_cmd = f"  Open it now:  {launcher} {folder}\n" if launcher else ""
-    if instance.ide == "pycharm":
+    name = instance.name
+    attach = f'"Attach to Odoo ({name})"'
+    no_editor = (
+        "[bold]Without an editor[/]\n"
+        f"  odoobuddy run {name}        in this terminal (Ctrl+C stops it)\n"
+        f"  odoobuddy start|stop|logs {name}   in the background\n"
+    )
+    ide = instance.ide
+    if ide in VSCODE_FAMILY:
+        editor = IDE_NAMES[ide]
         return (
-            "[bold]PyCharm[/]  (your installed PyCharm is used as-is; only .idea/ was written)\n"
-            + open_cmd
-            + f"  1. File → Open → {folder}\n"
-            f"  2. If asked for an interpreter: Add Interpreter → Existing → {_home(instance.python_bin)}\n"
-            f'  3. Top-right run menu: choose "Odoo {instance.version} ({instance.name})" → Debug (🐞)\n'
-            + stop_first
+            f"[bold]{editor}[/] [dim](your installed {editor} is used as-is; only .vscode/ was written)[/]\n"
+            f'  • Odoo starts by itself when the folder opens, in the terminal panel "Odoo: run {name}".\n'
+            '    First time only: trust the folder and click "Allow" for automatic tasks.\n'
+            f"  • Debug at any time: Run and Debug → {attach} → F5 (no restart needed).\n"
+            f"  • Reopen later: odoobuddy open {name}   (folder: {folder})\n\n" + no_editor
         )
-    if instance.ide in VSCODE_FAMILY:
-        name = IDE_NAMES[instance.ide]
-        default_cmd = {"vscode": "code", "cursor": "cursor", "windsurf": "windsurf", "vscodium": "codium"}
+    if ide == "pycharm":
         return (
-            f"[bold]{name}[/]  (your installed {name} is used as-is; only .vscode/ was written)\n"
-            f"  1. Open the folder: {launcher or default_cmd[instance.ide]} {folder}\n"
-            f'  2. Press F5 (configuration "Odoo {instance.version} ({instance.name})")\n' + stop_first
+            "[bold]PyCharm[/] [dim](your installed PyCharm is used as-is; only .idea/ was written)[/]\n"
+            f"  • Odoo starts by itself when the project opens (Startup Tasks), in the Run window.\n"
+            '    First time only: click "Trust Project"; if asked for an interpreter, choose\n'
+            f"    Existing → {_home(instance.python_bin)}\n"
+            f'  • To debug: stop it (■) and click Debug (🐞) on "Odoo {instance.version} ({name})".\n'
+            f"  • Reopen later: odoobuddy open {name}   (folder: {folder})\n\n" + no_editor
         )
-    if instance.mode == "local":
-        return f"[bold]Run in a terminal[/]\n  {folder}/start.sh   (Ctrl+C to stop)\n" + stop_first
-    return ""
+    if ide == "zed":
+        return (
+            "[bold]Zed[/] [dim](your installed Zed is used as-is; only .zed/ was written)[/]\n"
+            f'  • Start Odoo: Ctrl+Shift+P → "task: spawn" → "Odoo: run {name}"\n'
+            "    (Zed cannot start tasks automatically when a folder opens)\n"
+            f'  • Debug: Ctrl+Shift+P → "debugger: start" → {attach}\n'
+            f"  • Reopen later: odoobuddy open {name}   (folder: {folder})\n\n" + no_editor
+        )
+    return (
+        no_editor
+        + f"  {folder}/start.sh        same as odoobuddy run\n"
+        + f"  Use an editor later: odoobuddy open {name} --with vscode|pycharm|zed|cursor|...\n"
+    )
 
 
 def details_table(rows: list[tuple[str, str]]) -> Table:

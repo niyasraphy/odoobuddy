@@ -69,7 +69,7 @@ def test_local_community_flow():
 
 def test_second_instance_gets_next_free_ports_and_name(make_instance):
     existing = make_instance("odoo18")
-    p = Scripted("local", "18.0", "community", "", "", False, "none")
+    p = Scripted("local", "18.0", "community", "", "", False, "background")
     spec = run_wizard(p, make_ctx(instances={"odoo18": existing}))
     assert spec.name == "odoo18-2"
     assert (spec.http_port, spec.gevent_port) == (8169, 8172)
@@ -82,13 +82,13 @@ def test_enterprise_with_valid_token():
 
 
 def test_enterprise_retry_then_success():
-    p = Scripted("local", "19.0", "enterprise", "bad", True, "good", "shop", "8069", False, "none")
+    p = Scripted("local", "19.0", "enterprise", "bad", True, "good", "shop", "8069", False, "background")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "enterprise"
 
 
 def test_enterprise_failure_falls_back_to_community():
-    p = Scripted("local", "19.0", "enterprise", "bad", False, "shop", "8069", False, "none")
+    p = Scripted("local", "19.0", "enterprise", "bad", False, "shop", "8069", False, "background")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "community" and spec.github_token is None
     assert any("Continuing with Community" in s for s in p.said)
@@ -185,7 +185,7 @@ def test_installed_ide_is_labelled_and_preselected():
 
     class Recorder(Scripted):
         def select(self, message, choices, default=None):
-            if "IDE" in message:
+            if "run Odoo" in message:
                 seen["choices"], seen["default"] = dict(choices), default
             return super().select(message, choices, default)
 
@@ -195,6 +195,9 @@ def test_installed_ide_is_labelled_and_preselected():
     assert spec.ide == "pycharm"
     assert seen["default"] == "pycharm"
     assert seen["choices"]["pycharm"].endswith("✓ installed")
+    assert next(iter(seen["choices"])) == "pycharm"  # installed editors listed first
+    assert {"terminal", "background"} <= set(seen["choices"])
+    assert spec.run_mode == "editor"
     assert seen["choices"]["vscode"].endswith("not found on this computer")
     assert not any("demo" in q.lower() for q in p.asked)
 
@@ -225,7 +228,9 @@ def test_switching_to_server_asks_the_server_questions():
 def test_changing_edition_to_enterprise_asks_for_token():
     from odoobuddy.wizard import answers_without
 
-    first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "none"), make_ctx())
+    first = run_wizard(
+        Scripted("local", "19.0", "community", "shop", "8069", False, "background"), make_ctx()
+    )
     edited = run_wizard(Scripted("enterprise", "good"), make_ctx(preset=answers_without(first, "edition")))
     assert edited.edition == "enterprise" and edited.github_token == "good"
 
@@ -247,3 +252,18 @@ def test_server_without_domain_needs_free_internal_ports():
     p = Scripted("server", "18.0", "community", "prod", "8069", False, False)
     with pytest.raises(WizardAbort, match="internal port 18069"):
         run_wizard(p, make_ctx(is_root=True, port_in_use=lambda port: port == 18069))
+
+
+@pytest.mark.parametrize(
+    ("answer", "ide", "mode"),
+    [("terminal", "none", "terminal"), ("background", "none", "background"), ("zed", "zed", "editor")],
+)
+def test_run_mode_choices(answer, ide, mode):
+    spec = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, answer), make_ctx())
+    assert (spec.ide, spec.run_mode) == (ide, mode)
+
+
+def test_debug_port_must_be_free():
+    p = Scripted("local", "19.0", "community", "shop", "8069", False, "vscode")
+    with pytest.raises(WizardAbort, match="debugger needs port 28069"):
+        run_wizard(p, make_ctx(port_in_use=lambda port: port == 28069))

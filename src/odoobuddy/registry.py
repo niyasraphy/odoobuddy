@@ -75,6 +75,13 @@ class Registry:
         instances[instance.name] = instance
         self._save(instance.mode, instances)
 
+    def update(self, instance: Instance) -> None:
+        instances = self._load(instance.mode)
+        if instance.name not in instances:
+            raise RegistryError(f"no instance named {instance.name!r}")
+        instances[instance.name] = instance
+        self._save(instance.mode, instances)
+
     def remove(self, name: str) -> None:
         modes: tuple[Mode, ...] = ("local", "server")
         for mode in modes:

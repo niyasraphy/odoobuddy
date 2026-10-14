@@ -147,8 +147,21 @@ def test_systemd_unit(make_instance):
 
 def test_ide_files_are_valid(make_instance):
     inst = make_instance()
-    launch = json.loads(render.vscode_launch(inst))
-    assert launch["configurations"][0]["python"] == str(inst.python_bin)
+    launch = json.loads(render.vscode_launch(inst))["configurations"]
+    assert launch[0]["request"] == "attach" and launch[0]["connect"]["port"] == 28069
+    assert launch[1]["python"] == str(inst.python_bin)
+    task = json.loads(render.vscode_tasks(inst))["tasks"][0]
+    assert task["runOptions"]["runOn"] == "folderOpen"
+    assert task["options"]["env"] == {"ODOOBUDDY_DEBUG_PORT": "28069"}
+    assert task["args"] == [str(inst.odoo_bin), "-c", str(inst.config_path)]
+    startup = ET.fromstring(render.pycharm_startup(inst))
+    conf = startup.find("./component[@name='ProjectStartupSharedConfiguration']/configurations/configuration")
+    assert conf.get("id") == "Python.Odoo 18.0 (shop)" and conf.get("name") == "Odoo 18.0 (shop)"
+    zed_tasks = json.loads(render.zed_tasks(inst))
+    assert zed_tasks[0]["env"] == {"ODOOBUDDY_DEBUG_PORT": "28069"}
+    zed_debug = json.loads(render.zed_debug(inst))
+    assert zed_debug[0]["adapter"] == "Debugpy" and zed_debug[0]["connect"]["port"] == 28069
+    assert "export ODOOBUDDY_DEBUG_PORT=28069" in render.start_script(inst)
     assert json.loads(render.vscode_settings(inst))["python.defaultInterpreterPath"] == str(inst.python_bin)
     root = ET.fromstring(render.pycharm_run_config(inst))
     options = {o.get("name"): o.get("value") for o in root.iter("option")}
@@ -253,7 +266,7 @@ def test_find_ide(monkeypatch, tmp_path):
     monkeypatch.setitem(ide._PATTERNS, "pycharm", [str(toolbox / "pycharm*")])
     found = ide.detect_ides()
     assert found["vscode"] == "/usr/bin/code" and found["pycharm"] == str(toolbox / "pycharm")
-    assert set(found) == {"vscode", "cursor", "windsurf", "vscodium", "pycharm"}
+    assert set(found) == {"vscode", "cursor", "windsurf", "vscodium", "pycharm", "zed"}
     monkeypatch.setitem(ide._PATTERNS, "pycharm", [])
     assert ide.find_ide("pycharm", desktop_dirs=[]) is None
 
