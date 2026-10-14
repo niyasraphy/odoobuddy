@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import configparser
 import secrets
 import shlex
 import shutil
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -76,11 +77,61 @@ def wkhtmltopdf_url(codename: str, arch: str) -> str | None:
     )
 
 
+WORKER_MB = 300  # rough RAM of one Odoo worker process
+LOCAL_INSTANCE_MB = 1024  # a development instance (one process, dev mode)
+MIN_FREE_DISK_GB = 5  # Odoo code and Python environment (2-3 GB) plus room for a first database
+
+
 def suggested_workers(cpus: int, ram_mb: int) -> int:
     """Odoo's rule of thumb (2 x CPU + 1), capped so workers fit in RAM (~300 MB each)."""
     by_cpu = cpus * 2 + 1
-    by_ram = max(1, (ram_mb - 1024) // 300) if ram_mb else by_cpu
+    by_ram = max(1, (ram_mb - 1024) // WORKER_MB) if ram_mb else by_cpu
     return max(2, min(by_cpu, by_ram))
+
+
+def worker_limit(cpus: int, ram_mb: int, used: int = 0) -> int:
+    """Most workers a new server instance can have, next to ``used`` processes of other instances.
+
+    The machine's budget is Odoo's 2 x CPU + 1, or what fits in RAM, whichever is lower;
+    the new instance's cron process takes one more.
+    """
+    by_cpu = cpus * 2 + 1
+    by_ram = (ram_mb - 1024) // WORKER_MB if ram_mb else by_cpu
+    return max(1, min(by_cpu, by_ram) - used - 1)
+
+
+def processes_in_use(instances: Iterable[Instance]) -> int:
+    """Odoo processes of the server instances already here: their workers plus one cron each."""
+    total = 0
+    for inst in instances:
+        if inst.mode != "server":
+            continue
+        parser = configparser.ConfigParser(interpolation=None)
+        parser.read(inst.config_path, encoding="utf-8")
+        workers = parser.get("options", "workers", fallback="0").strip()
+        total += (int(workers) if workers.isdigit() else 0) + 1
+    return total
+
+
+def resource_warnings(spec: InstallSpec, *, available_mb: int, free_disk_gb: float) -> list[str]:
+    """Why this machine may be too small for one more instance (empty if it looks fine)."""
+    warnings = []
+    if spec.mode == "server":
+        need_mb = (max(spec.workers, 1) + 1) * WORKER_MB  # + 1: the cron process
+        what = f"{spec.workers} workers + cron"
+    else:
+        need_mb, what = LOCAL_INSTANCE_MB, "one development instance"
+    if available_mb and available_mb < need_mb:
+        warnings.append(
+            f"Free memory: {available_mb / 1024:.1f} GB, this instance needs about "
+            f"{need_mb / 1024:.1f} GB ({what}). Odoo may become slow or be stopped when memory runs out."
+        )
+    if free_disk_gb < MIN_FREE_DISK_GB:
+        warnings.append(
+            f"Free disk space: {free_disk_gb:.1f} GB, at least {MIN_FREE_DISK_GB} GB is recommended "
+            "(Odoo code, Python packages, database and attachments). A full disk can corrupt data."
+        )
+    return warnings
 
 
 @dataclass

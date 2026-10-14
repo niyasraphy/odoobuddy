@@ -290,3 +290,32 @@ def test_dry_run_shows_home_as_tilde(monkeypatch, tmp_path):
     console = Console(record=True, width=200)
     Runner(console=console, dry_run=True).run(["ls", str(tmp_path / "odoo" / "shop")])
     assert "$ ls ~/odoo/shop" in console.export_text()
+
+
+def test_free_memory_and_disk(tmp_path):
+    from odoobuddy.system import free_disk_gb, memory_available_mb
+
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemTotal:  8000000 kB\nMemFree:  100000 kB\nMemAvailable:  2097152 kB\n")
+    assert memory_available_mb(meminfo) == 2048
+    assert memory_available_mb(tmp_path / "missing") == 0
+    assert free_disk_gb(tmp_path / "not" / "created" / "yet") > 0  # measured on the nearest existing folder
+
+
+@pytest.mark.parametrize(
+    ("env", "mode"),
+    [
+        ({"DISPLAY": ":0"}, "local"),
+        ({"WAYLAND_DISPLAY": "wayland-0", "SSH_CONNECTION": "1 2 3 22"}, "local"),
+        ({"SSH_CONNECTION": "1.2.3.4 5 6.7.8.9 22"}, "server"),
+        ({}, "server"),
+    ],
+)
+def test_detect_mode(monkeypatch, env, mode):
+    from odoobuddy.system import detect_mode
+
+    for key in ("DISPLAY", "WAYLAND_DISPLAY", "SSH_CONNECTION"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    assert detect_mode()[0] == mode

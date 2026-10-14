@@ -13,7 +13,7 @@
 
 ```bash
 pipx install odoobuddy      # or: pip install odoobuddy
-odoobuddy
+odoobuddy install
 ```
 
 The wizard asks a few questions, then sets up everything:
@@ -104,6 +104,7 @@ odoobuddy run shop                  # or just run it in this terminal
 
 ```bash
 odoobuddy list                 # all instances, versions, ports and status
+odoobuddy status shop          # running or stopped, and its address (no name: all)
 odoobuddy info shop            # paths, ports, database, source code
 odoobuddy use shop             # set the "current" instance
 
@@ -121,6 +122,7 @@ odoobuddy remove shop          # asks you to type "shop" to confirm
 
 odoobuddy doctor               # check the system and every instance
 odoobuddy versions             # Odoo versions available to install
+odoobuddy support              # docs, bug reports and contact
 ```
 
 ### Which instance does a command use?
@@ -135,7 +137,7 @@ odoobuddy versions             # Odoo versions available to install
 Everything about an instance lives in **one folder**:
 
 ```
-~/odoo/testing20/                 (server: /opt/odoobuddy/instances/testing20/)
+~/odoo/testing20/                 (server: /opt/odoo/testing20/)
 ├── odoo/
 │   ├── odoo/                     ← Odoo Community (branch 20.0, latest commit only)
 │   └── enterprise/               ← Odoo Enterprise (if chosen)

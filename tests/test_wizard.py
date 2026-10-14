@@ -352,3 +352,32 @@ def test_install_editor_survives_changing_another_setting():
     )
     assert answers_without(spec, "http_port")["install_editor"] is True
     assert "install_editor" not in answers_without(spec, "ide")
+
+
+def test_server_is_offered_first_and_detection_picks_the_default():
+    seen = {}
+
+    class Spy(Scripted):
+        def select(self, message, choices, default=None):
+            if message.startswith("Where"):
+                seen.update(choices=choices, default=default)
+            return super().select(message, choices, default)
+
+    with pytest.raises(WizardAbort):  # stop right after the first question
+        run_wizard(
+            Spy("server"), make_ctx(detected_mode="server", detected_reason="connected over SSH, no desktop")
+        )
+    assert [value for value, _ in seen["choices"]] == ["server", "local"]
+    assert seen["default"] == "server" and "detected: connected over SSH" in seen["choices"][0][1]
+
+
+def test_too_many_workers_must_be_lowered():
+    from odoobuddy.wizard import _validate_workers
+
+    check = _validate_workers(3)
+    assert check("3") == "" and check("1") == ""
+    assert "at most 3" in check("4") and check("0") and check("x")
+    preset = dict(mode="server", version="19.0", edition="community", name="prod", http_port=8069)
+    ctx = make_ctx(is_root=True, max_workers=3, preset={**preset, "repos": [], "domain": None, "workers": 8})
+    with pytest.raises(WizardAbort, match="--workers 8 is more than this server can run: at most 3"):
+        run_wizard(Scripted(), ctx)

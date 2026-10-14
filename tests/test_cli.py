@@ -1,8 +1,10 @@
+from types import SimpleNamespace
+
 import pytest
 from typer.testing import CliRunner
 
 from odoobuddy import __version__
-from odoobuddy.cli import app
+from odoobuddy.cli import app, rewrite_args
 from odoobuddy.layout import Layout
 from odoobuddy.registry import Registry
 
@@ -88,7 +90,7 @@ def test_install_rejects_bad_option():
     assert result.exit_code == 1 and "--mode must be one of" in result.output
 
 
-def test_no_command_starts_the_wizard(monkeypatch):
+def test_install_starts_the_wizard(monkeypatch):
     seen = {}
 
     def fake_wizard(prompter, ctx):
@@ -98,9 +100,7 @@ def test_no_command_starts_the_wizard(monkeypatch):
         raise WizardAbort("stop here")
 
     monkeypatch.setattr("odoobuddy.cli.run_wizard", fake_wizard)
-    # With an empty list, click falls back to sys.argv (pytest's own arguments).
-    monkeypatch.setattr("sys.argv", ["odoobuddy"])
-    result = runner.invoke(app, [])
+    result = runner.invoke(app, ["install"])
     assert "stop here" in result.output
     assert seen["preset"] == {}  # nothing pre-answered
 
@@ -120,7 +120,7 @@ def test_tab_completion_for_commands_and_instance_names(isolated, make_instance,
         env.update(COMP_WORDS=words, COMP_CWORD=str(cword))
         return subprocess.run([str(script)], env=env, capture_output=True, text=True).stdout.split()
 
-    assert complete("odoobuddy st", 1) == ["start", "stop"]
+    assert complete("odoobuddy st", 1) == ["status", "start", "stop"]
     assert complete("odoobuddy start ", 2) == ["hr", "shop"]
     assert complete("odoobuddy logs s", 2) == ["shop"]
 
@@ -144,3 +144,72 @@ def test_install_from_a_script_needs_yes():
     ]
     result = runner.invoke(app, args)
     assert result.exit_code == 1 and "add --yes" in result.output
+
+
+def test_help_spellings():
+    assert rewrite_args(["help"], set()) == ["--help"]
+    assert rewrite_args(["help", "install"], set()) == ["install", "--help"]
+    assert rewrite_args(["help", "start"], {"help"}) == ["start", "help"]  # an instance called help
+    for args in (["-h"], ["help"], ["help", "backup"], ["backup", "-h"]):
+        result = runner.invoke(app, rewrite_args(args, set()))
+        assert result.exit_code == 0 and "Usage" in result.output, args
+
+
+def test_status(isolated, make_instance):
+    isolated.add(make_instance("shop"))
+    isolated.add(make_instance("prod", mode="server", http_port=8169, gevent_port=8172))
+    every = runner.invoke(app, ["status"])
+    assert every.exit_code == 0 and "shop" in every.output and "prod" in every.output
+    one = runner.invoke(app, ["status", "shop"])
+    assert one.exit_code == 0 and "stopped" in one.output and "odoobuddy start shop" in one.output
+    assert rewrite_args(["shop", "status"], {"shop"}) == ["status", "shop"]
+
+
+def test_no_command_welcomes(isolated, make_instance, monkeypatch):
+    # With an empty list, click falls back to sys.argv (pytest's own arguments).
+    monkeypatch.setattr("sys.argv", ["odoobuddy"])
+    monkeypatch.setattr("odoobuddy.cli.run_wizard", lambda *a, **k: pytest.fail("wizard started"))
+    first = runner.invoke(app, [])
+    assert first.exit_code == 0 and "Welcome to odoobuddy" in first.output
+    assert "no Odoo instances yet" in first.output and "odoobuddy install" in first.output
+    isolated.add(make_instance("shop"))
+    again = runner.invoke(app, [])
+    assert "Your instances" in again.output and "shop" in again.output
+
+
+INSTALL_SHOP = [
+    "install", "--mode", "local", "--version", "18.0", "--edition", "community", "--name", "shop",
+    "--port", "18069", "--run-with", "terminal", "--no-repos",
+]  # fmt: skip
+
+
+def test_small_machine_warns_and_lets_the_user_decide(isolated, monkeypatch):
+    monkeypatch.setattr("odoobuddy.cli.memory_available_mb", lambda: 300)
+    dry = runner.invoke(app, [*INSTALL_SHOP, "--dry-run", "--yes"])
+    assert "may be too small" in dry.output and "Free memory: 0.3 GB" in dry.output
+
+    answers = []
+    # CliRunner replaces sys.stdin, so pretend to be in a terminal through the module's view of sys.
+    monkeypatch.setattr(
+        "odoobuddy.cli.sys", SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True), argv=[])
+    )
+    monkeypatch.setattr("odoobuddy.cli.QuestionaryPrompter.select", lambda self, *a, **k: "install")
+    monkeypatch.setattr(
+        "odoobuddy.cli.QuestionaryPrompter.confirm",
+        lambda self, message, default: answers.append(message) or False,
+    )
+    cancelled = runner.invoke(app, INSTALL_SHOP)
+    assert answers == ["Install anyway, at your own risk?"], cancelled.output
+    assert cancelled.exit_code == 1 and "Cancelled, nothing was changed" in cancelled.output
+
+
+def test_credits_and_support(isolated, monkeypatch):
+    version = runner.invoke(app, ["--version"])
+    assert "by Niyas Raphy" in version.output and "github.com/niyasraphy/odoobuddy" in version.output
+    monkeypatch.setattr("sys.argv", ["odoobuddy"])
+    welcome = runner.invoke(app, [])
+    assert "Welcome to odoobuddy" in welcome.output and "by Niyas Raphy" in welcome.output
+    assert "odoobuddy support" in welcome.output
+    support = runner.invoke(app, ["support"])
+    assert support.exit_code == 0
+    assert "niyasraphyk@gmail.com" in support.output and "/issues" in support.output

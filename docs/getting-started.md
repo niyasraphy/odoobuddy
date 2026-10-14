@@ -12,7 +12,7 @@ odoobuddy --install-completion   # optional: Tab completion for commands and ins
 
 ## Your first instance
 
-Run `odoobuddy` (or `odoobuddy install`) and answer the questions:
+Run `odoobuddy install` and answer the questions:
 
 | Question | Notes |
 |---|---|

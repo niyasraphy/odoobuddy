@@ -85,7 +85,8 @@ class QuestionaryPrompter:
     def confirm(self, message: str, default: bool = True) -> bool:
         import questionary
 
-        return bool(self._ask(questionary.confirm(message, default=default)))
+        # auto_enter=False: typing y or n only selects; Enter confirms, so a stray key can be corrected.
+        return bool(self._ask(questionary.confirm(message, default=default, auto_enter=False)))
 
     def say(self, message: str) -> None:
         self._say(message)
@@ -124,6 +125,11 @@ class WizardContext:
     check_enterprise: Callable[[str], AccessResult]
     is_root: bool
     suggested_workers: int
+    # Most workers this machine can take next to the instances already on it.
+    max_workers: int = 64
+    # Where the wizard thinks it runs, and why: the default answer to "local or server".
+    detected_mode: Mode = "local"
+    detected_reason: str = ""
     resolve_domain: Callable[[str], set[str]] = resolve_domain
     public_ip: Callable[[], str | None] = public_ip
     preset: dict[str, Any] = field(default_factory=dict)
@@ -159,20 +165,47 @@ def _validate_int(low: int, high: int) -> Callable[[str], str]:
     return check
 
 
+def _too_many(most: int) -> str:
+    return (
+        f"at most {most}. Each worker needs about 300 MB of RAM and a share of the CPU; "
+        "too many make Odoo slow or get it stopped when memory runs out"
+    )
+
+
+def _validate_workers(most: int) -> Callable[[str], str]:
+    def check(value: str) -> str:
+        if not value.isdigit() or int(value) < 1:
+            return "enter a number of workers, e.g. 2"
+        if int(value) > most:
+            return f"⚠ Too many: this server can run at most {most} (about 300 MB of RAM each)"
+        return ""
+
+    return check
+
+
 def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     pre = ctx.preset
     instances = ctx.instances
 
     # 1. Local or server
+    detected = f"  ← detected: {ctx.detected_reason}" if ctx.detected_reason else ""
     mode: Mode = pre.get("mode") or cast(
         Mode,
         p.select(
             "Where are you installing Odoo?",
             [
-                ("local", "Local - my computer, for development"),
-                ("server", "Server - production, with service, Nginx and SSL"),
+                (
+                    "server",
+                    "Server - production, with service, Nginx and SSL"
+                    + (detected if ctx.detected_mode == "server" else ""),
+                ),
+                (
+                    "local",
+                    "Local - my computer, for development"
+                    + (detected if ctx.detected_mode == "local" else ""),
+                ),
             ],
-            default="local",
+            default=ctx.detected_mode,
         ),
     )
     if mode == "server" and not ctx.is_root:
@@ -319,11 +352,14 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
                     f"Odoo needs internal port {port} (your port + {BACKEND_OFFSET}), which is not free; "
                     "choose another port"
                 )
+    most = ctx.max_workers
+    if pre.get("workers") and pre["workers"] > most:
+        raise WizardAbort(f"--workers {pre['workers']} is more than this server can run: {_too_many(most)}")
     spec.workers = pre.get("workers") or int(
         p.text(
-            "Number of Odoo workers (based on this server's CPU and RAM):",
-            default=str(ctx.suggested_workers),
-            validate=_validate_int(1, 64),
+            f"Number of Odoo workers (at most {most} for this server's CPU, RAM and other instances):",
+            default=str(min(ctx.suggested_workers, most)),
+            validate=_validate_workers(most),
         )
     )
     spec.firewall = (

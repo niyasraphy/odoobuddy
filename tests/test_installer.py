@@ -3,7 +3,7 @@ import json
 import pytest
 
 from odoobuddy import installer as installer_mod
-from odoobuddy.installer import Installer
+from odoobuddy.installer import Installer, processes_in_use, resource_warnings, worker_limit
 from odoobuddy.models import InstallSpec
 from odoobuddy.registry import MARKER_FILE
 
@@ -113,7 +113,7 @@ def test_server_install(layout, registry, monkeypatch):
     assert (layout.systemd_dir / "odoo-prod.service").exists()
     assert (layout.nginx_dir / "sites-available" / "odoo-prod.conf").exists()
     assert (layout.logrotate_dir / "odoo-prod").exists()
-    conf = (layout.server_root / "instances" / "prod" / "conf" / "odoo.conf").read_text()
+    conf = (layout.server_root / "prod" / "conf" / "odoo.conf").read_text()
     assert "workers = 4" in conf and "proxy_mode = True" in conf
     assert registry.get("prod").url == "https://erp.example.com"
 
@@ -301,3 +301,27 @@ def test_editor_install_failure_is_only_a_warning(layout, registry, monkeypatch)
     monkeypatch.setattr(ide, "editor_install", lambda i: EditorInstall(["sh", "-c", "curl"], False, "x"))
     inst.install_editor()
     assert "Installing Zed failed" in inst.warnings[0] and "odoobuddy open a" in inst.warnings[0]
+
+
+def test_resource_warnings():
+    server = InstallSpec(name="prod", version="19.0", mode="server", workers=4)  # needs 5 x 300 MB
+    assert resource_warnings(server, available_mb=8000, free_disk_gb=50) == []
+    memory, disk = resource_warnings(server, available_mb=1000, free_disk_gb=2)
+    assert "Free memory: 1.0 GB" in memory and "4 workers" in memory
+    assert "Free disk space: 2.0 GB" in disk
+    assert resource_warnings(server, available_mb=0, free_disk_gb=50) == []  # memory unknown: no guess
+    local = InstallSpec(name="shop", version="19.0", mode="local")
+    assert len(resource_warnings(local, available_mb=800, free_disk_gb=50)) == 1
+
+
+def test_worker_limit_counts_other_instances(make_instance):
+    assert worker_limit(cpus=2, ram_mb=8192) == 4  # 2 x 2 + 1 = 5 processes, one is the cron
+    assert worker_limit(cpus=8, ram_mb=4096) == 9  # RAM-bound: (4096 - 1024) / 300 = 10
+    assert worker_limit(cpus=2, ram_mb=8192, used=3) == 1
+    assert worker_limit(cpus=1, ram_mb=1024, used=9) == 1  # never below one
+
+    prod = make_instance("prod", mode="server")
+    prod.config_path.parent.mkdir(parents=True, exist_ok=True)
+    prod.config_path.write_text("[options]\nworkers = 4\n")
+    missing = make_instance("old", mode="server", http_port=8169, gevent_port=8172)  # no config: cron only
+    assert processes_in_use([prod, missing, make_instance("shop")]) == 4 + 1 + 1

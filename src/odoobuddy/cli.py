@@ -17,19 +17,29 @@ from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
 
-from . import __version__, editors, operations, repos, sources, ui
+from . import AUTHOR, DOCS_URL, REPO_URL, SUPPORT_EMAIL, __version__, editors, operations, repos, sources, ui
 from . import pull as pull_mod
 from .ide import detect_ides, editor_install, find_ide, install_hint
-from .installer import CHECK_MODULE, Installer, suggested_workers
+from .installer import (
+    CHECK_MODULE,
+    Installer,
+    processes_in_use,
+    resource_warnings,
+    suggested_workers,
+    worker_limit,
+)
 from .layout import Layout
-from .models import IDE_NAMES, Instance, RepoSpec
+from .models import IDE_NAMES, InstallSpec, Instance, RepoSpec
 from .registry import Registry, RegistryError, resolve
 from .system import (
     CommandError,
     Runner,
     SudoSession,
     cpu_count,
+    detect_mode,
+    free_disk_gb,
     is_root,
+    memory_available_mb,
     memory_mb,
     os_release,
     port_in_use,
@@ -49,6 +59,7 @@ app = typer.Typer(
     no_args_is_help=False,
     add_completion=True,
     rich_markup_mode="rich",
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 console = ui.console
 
@@ -143,7 +154,7 @@ def _runner(dry_run: bool, log_name: str) -> Runner:
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"odoobuddy {__version__}")
+        console.print(f"odoobuddy {__version__} · by {AUTHOR} · {ui.link(REPO_URL)}")
         raise typer.Exit()
 
 
@@ -154,11 +165,67 @@ def main(
         False, "--version", callback=_version_callback, is_eager=True, help="Show the version and exit."
     ),
 ) -> None:
-    """With no command, starts the install wizard."""
+    """With no command, shows a welcome with the instances and the commands to start with."""
     if ctx.invoked_subcommand is None:
-        # Invoke the click command (not the Python function) so option defaults are applied.
-        install_command = ctx.command.get_command(ctx, "install")  # type: ignore[attr-defined]
-        ctx.invoke(install_command)
+        _welcome()
+
+
+def _check_resources(
+    spec: InstallSpec, registry: Registry, prompter: QuestionaryPrompter, *, yes: bool, dry_run: bool
+) -> None:
+    """Warn when the machine looks too small for one more instance; the user decides."""
+    warnings = resource_warnings(
+        spec,
+        available_mb=memory_available_mb(),
+        free_disk_gb=free_disk_gb(_layout().instance_dir(spec.mode, spec.name)),
+    )
+    if not warnings:
+        return
+    others = sorted(name for name in registry.all() if name != spec.name)
+    text = "\n".join(f"• {escape(w)}" for w in warnings)
+    if others:
+        text += f"\n\n[dim]Already on this machine: {len(others)} instance(s): {', '.join(others)}[/]"
+    console.print(Panel(text, title="⚠ This machine may be too small", border_style="yellow", expand=False))
+    if dry_run:
+        return
+    if yes:
+        console.print("[yellow]Continuing because of --yes.[/]")
+        return
+    try:
+        go = prompter.confirm("Install anyway, at your own risk?", default=False)
+    except WizardAbort:
+        go = False
+    if not go:
+        console.print("Cancelled, nothing was changed.")
+        raise typer.Exit(1)
+
+
+def _welcome() -> None:
+    console.print(
+        f"[bold]Welcome to odoobuddy[/] [dim]{__version__}[/] · by {AUTHOR}\n"
+        "Install and manage Odoo instances, on your computer or on a server.\n"
+    )
+    registry = _registry()
+    instances = sorted(registry.all().values(), key=lambda i: i.name)
+    if instances:
+        statuses = {i.name: operations.status(i) for i in instances}
+        console.print(ui.heading("Your instances"))
+        console.print(ui.instances_table(instances, statuses, registry.current()))
+        console.print()
+        commands = [
+            ("odoobuddy install", "install another Odoo instance"),
+            ("odoobuddy status NAME", "is it running, and where to open it"),
+            ("odoobuddy start|stop|restart NAME", "control an instance"),
+            ("odoobuddy logs NAME", "watch its log"),
+            ("odoobuddy info NAME", "paths, ports and configuration"),
+        ]
+    else:
+        console.print("You have no Odoo instances yet. Start here:\n")
+        commands = [("odoobuddy install", "answer a few questions, and Odoo is set up for you")]
+    commands += [("odoobuddy help", "all commands"), ("odoobuddy support", "questions, bugs and contact")]
+    width = max(len(c) for c, _ in commands)
+    for command, what in commands:
+        console.print(f"  {ui.cmd(command.ljust(width))}  [dim]{what}[/]")
 
 
 # ------------------------------------------------------------------ install
@@ -246,6 +313,7 @@ def install(
             raise _fail(f"--{key} must be one of: {', '.join(sorted(allowed))}")
 
     registry = _registry()
+    detected_mode, detected_reason = detect_mode()
     ctx = WizardContext(
         instances=registry.all(),
         versions=lambda: _with_status("Reading Odoo versions from GitHub…", available_versions),
@@ -255,6 +323,9 @@ def install(
         ),
         is_root=is_root() or dry_run,
         suggested_workers=suggested_workers(cpu_count(), memory_mb()),
+        max_workers=worker_limit(cpu_count(), memory_mb(), processes_in_use(registry.all().values())),
+        detected_mode=detected_mode,
+        detected_reason=detected_reason,
         installed_ides=detect_ides(),
         find_ide=find_ide,
         editor_install=editor_install,
@@ -296,6 +367,7 @@ def install(
         except WizardAbort as exc:
             raise _fail(str(exc)) from None
 
+    _check_resources(spec, registry, prompter, yes=yes, dry_run=dry_run)
     runner = _runner(dry_run, f"install-{spec.name}")
     installer = Installer(spec, layout=_layout(), registry=registry, runner=runner)
     steps = installer.plan()
@@ -360,6 +432,7 @@ def install(
     console.print(
         f"[dim]Manage it: odoobuddy start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
     )
+    console.print(f"\n[dim]odoobuddy by {AUTHOR} · if it helped, a ⭐ on GitHub is welcome: {REPO_URL}[/]")
 
 
 def _after_install(runner: Runner, inst: Instance) -> str:
@@ -460,6 +533,26 @@ def info(
     help_text = ui.ide_help(inst)
     if help_text:
         console.print("\n" + help_text.rstrip())
+
+
+@app.command()
+def status(
+    name: Optional[str] = typer.Argument(
+        None, help="Instance name (all instances if left out)", autocompletion=_complete_names
+    ),
+) -> None:
+    """Is Odoo running? Every instance, or just one."""
+    if name is None:
+        list_instances()
+        return
+    inst = _instance(name)
+    if operations.status(inst) == operations.STATUS_RUNNING:
+        console.print(f"[bold]{inst.name}[/]  [green]● running[/]  {ui.link(inst.url)}")
+        return
+    console.print(f"[bold]{inst.name}[/]  [dim]○ stopped[/]")
+    console.print(f"  Start it: {ui.cmd(f'odoobuddy start {inst.name}')}")
+    if inst.mode == "server":
+        console.print(f"  Why it stopped: {ui.cmd(f'journalctl -u {inst.service} -n 50')}")
 
 
 @app.command()
@@ -612,7 +705,20 @@ def logs(
 ) -> None:
     """Show an instance's log."""
     inst = _instance(name)
-    ui.banner(inst, f"Log: {inst.log_path}")
+    action = f"Log: {inst.log_path}"
+    if follow:
+        action += "\nShowing new lines as they come - Ctrl+C to stop (--no-follow to just print)"
+    ui.banner(inst, action)
+    if not inst.log_path.exists() or inst.log_path.stat().st_size == 0:
+        state = "does not exist yet" if not inst.log_path.exists() else "is empty"
+        console.print(f"[yellow]⚠ The log {state}: Odoo has not written anything to it.[/]")
+        if inst.mode == "server":
+            console.print(
+                f"  Is Odoo running? {ui.cmd(f'systemctl status {inst.service}')}  "
+                f"[dim]startup errors:[/] {ui.cmd(f'journalctl -u {inst.service} -n 50')}"
+            )
+        else:
+            console.print(f"  Is Odoo running? {ui.cmd(f'odoobuddy start {inst.name}')}")
     cmd = operations.logs_command(inst, lines, follow)
     os.execvp(cmd[0], cmd)
 
@@ -924,6 +1030,28 @@ def list_repositories(
 
 
 @app.command()
+def support() -> None:
+    """Where to get help, report a bug, or contact the author."""
+    rows = [
+        ("Documentation", ui.link(DOCS_URL)),
+        (
+            "Questions and bugs",
+            f"{ui.link(REPO_URL + '/issues')}  [dim](search first, someone may have asked)[/]",
+        ),
+        ("Email", f"{SUPPORT_EMAIL}  [dim](security problems and private matters)[/]"),
+        ("Source code", ui.link(REPO_URL)),
+    ]
+    console.print(f"[bold]odoobuddy[/] [dim]{__version__}[/] · by {AUTHOR}\n")
+    console.print(ui.details_table(rows))
+    console.print(
+        f"\n[dim]When reporting a problem, include the output of[/] {ui.cmd('odoobuddy doctor')}"
+        "[dim], and for a failed install the end of its log:[/] "
+        f"{ui.path('/var/log/odoobuddy/')} [dim]on servers,[/] {ui.path('~/.local/share/odoobuddy/logs/')} "
+        "[dim]locally.[/]"
+    )
+
+
+@app.command()
 def doctor() -> None:
     """Check the system and every instance for problems."""
     problems = 0
@@ -948,6 +1076,7 @@ def versions() -> None:
 
 # Commands that take the instance as their first argument, and ones that take --instance.
 _NAME_FIRST = {
+    "status",
     "run",
     "open",
     "info",
@@ -966,7 +1095,12 @@ _NAME_OPTION = {"clone": "--instance", "restore": "--name", "pull": "--into"}
 
 
 def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
-    """Allow ``odoobuddy INSTANCE COMMAND ...`` as well as ``odoobuddy COMMAND INSTANCE``."""
+    """Allow ``odoobuddy INSTANCE COMMAND ...`` as well as ``odoobuddy COMMAND INSTANCE``.
+
+    Also ``odoobuddy help [COMMAND]``, as people type it, for ``odoobuddy [COMMAND] --help``.
+    """
+    if args and args[0] == "help" and "help" not in instance_names:
+        return [*args[1:2], "--help"]
     if len(args) >= 2 and args[0] in instance_names:
         name, command, rest = args[0], args[1], args[2:]
         if command in _NAME_FIRST:

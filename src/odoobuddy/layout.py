@@ -32,7 +32,7 @@ class Layout:
         return cls(
             local_home=Path(os.environ.get("ODOOBUDDY_HOME", Path.home() / "odoo")),
             state_dir=data_home / "odoobuddy",
-            server_root=Path("/opt/odoobuddy"),
+            server_root=Path("/opt/odoo"),
             server_etc=Path("/etc/odoobuddy"),
             server_conf_dir=Path("/etc/odoo"),
             server_log_dir=Path("/var/log/odoo"),
@@ -48,7 +48,7 @@ class Layout:
         return cls(
             local_home=root / "home" / "odoo",
             state_dir=root / "home" / ".local" / "share" / "odoobuddy",
-            server_root=root / "opt" / "odoobuddy",
+            server_root=root / "opt" / "odoo",
             server_etc=root / "etc" / "odoobuddy",
             server_conf_dir=root / "etc" / "odoo",
             server_log_dir=root / "var" / "log" / "odoo",
@@ -59,7 +59,7 @@ class Layout:
         )
 
     def instance_dir(self, mode: Mode, name: str) -> Path:
-        return self.local_home / name if mode == "local" else self.server_root / "instances" / name
+        return (self.local_home if mode == "local" else self.server_root) / name
 
     # Inside an instance folder:  odoo/odoo (community), odoo/enterprise, custom/, conf/
     def community_dir(self, mode: Mode, name: str) -> Path:
@@ -89,5 +89,6 @@ class Layout:
 
     def python_install_dir(self, mode: Mode) -> Path | None:
         # Server instances run as their own system user, so uv-managed Pythons must live
-        # somewhere readable by everyone, not in root's home directory.
-        return None if mode == "local" else self.server_root / "python"
+        # somewhere readable by everyone, not in root's home directory. Hidden, so it cannot
+        # clash with an instance folder (names start with a letter).
+        return None if mode == "local" else self.server_root / ".python"

@@ -18,6 +18,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.markup import escape
 
+from .models import Mode
+
 
 class CommandError(RuntimeError):
     """A command failed. ``output`` holds the tail of what it printed."""
@@ -221,6 +223,33 @@ def memory_mb(path: Path = Path("/proc/meminfo")) -> int:
     except (OSError, ValueError, IndexError):
         pass
     return 0
+
+
+def memory_available_mb(path: Path = Path("/proc/meminfo")) -> int:
+    """RAM free for new programs (what running instances already use is not counted). 0 if unknown."""
+    try:
+        for line in path.read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) // 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return 0
+
+
+def free_disk_gb(path: Path) -> float:
+    """Free space on the disk that ``path`` is (or will be) on."""
+    while not path.exists() and path != path.parent:
+        path = path.parent
+    return shutil.disk_usage(path).free / 1024**3
+
+
+def detect_mode() -> tuple[Mode, str]:
+    """("server" or "local", why): a desktop session means a computer someone works at."""
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return "local", "desktop session found"
+    if os.environ.get("SSH_CONNECTION"):
+        return "server", "connected over SSH, no desktop"
+    return "server", "no desktop session"
 
 
 def cpu_count() -> int:

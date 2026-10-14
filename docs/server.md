@@ -43,7 +43,7 @@ prints the exact `certbot` command to run later.
 ## Where things are
 
 ```
-/opt/odoobuddy/instances/NAME/     odoo/odoo, odoo/enterprise, custom/, conf/odoo.conf, venv/
+/opt/odoo/NAME/                   odoo/odoo, odoo/enterprise, custom/, conf/odoo.conf, venv/
 /var/lib/odoo/NAME/                filestore
 /var/log/odoo/NAME.log             log (rotated weekly)
 /var/backups/odoobuddy/NAME/       backups

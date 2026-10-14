@@ -7,7 +7,7 @@ servers, with one command.**
 
 ```bash
 pipx install odoobuddy
-odoobuddy
+odoobuddy install
 ```
 
 The wizard asks a few questions (local or server, Odoo version, Community or Enterprise,
