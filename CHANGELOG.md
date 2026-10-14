@@ -32,6 +32,7 @@
 - Documentation site, demo GIF, issue and pull request templates, CONTRIBUTING and SECURITY.
 
 ### Changed
+- Colours in the install result and `info`: links (clickable), folders and files, commands to type, keyboard shortcuts, the master password and section headings each have their own colour
 - Installing from a script (no terminal) now requires `--yes`.
 
 ## [0.1.0] - 2026-10-13

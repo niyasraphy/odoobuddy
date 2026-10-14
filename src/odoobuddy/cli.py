@@ -335,13 +335,14 @@ def install(
     for warning in installer.warnings:
         console.print(f"[yellow]⚠ {warning}[/yellow]")
     creds = installer.credentials
+    manager = ui.link(f"{inst.url}/web/database/manager")
     first_db = (
-        "[bold]Create your first database[/]\n"
-        f"  1. {'Once Odoo is running, open' if inst.run_mode != 'background' else 'Open'} "
-        f"{inst.url}/web/database/manager\n"
-        f"  2. Master password: [bold]{creds.master_password}[/]\n"
+        ui.heading("Create your first database") + "\n"
+        f"  1. {'Once Odoo is running, open' if inst.run_mode != 'background' else 'Open'} {manager}\n"
+        f"  2. Master password: {ui.secret(creds.master_password)}\n"
         "  3. Choose the database name, language, country, demo data and admin password\n"
-        f"  [dim](the master password is also saved as admin_passwd in {inst.config_path})[/]"
+        "  [dim](the master password is also saved as admin_passwd in[/] "
+        f"{ui.path(inst.config_path)}[dim])[/]"
     )
     body = Group(
         f"[bold green]✓ Odoo {inst.version} is installed and working[/] "
@@ -353,7 +354,7 @@ def install(
     help_text = ui.ide_help(inst)
     if help_text:
         body = Group(body, "", help_text.rstrip())
-    console.print(Panel(body, title=inst.label, expand=False))
+    console.print(Panel(body, title=f"[bold]{escape(inst.label)}[/]", border_style="green", expand=False))
     if after:
         console.print(after)
     console.print(
