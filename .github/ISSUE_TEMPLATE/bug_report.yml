@@ -1,0 +1,57 @@
+name: Bug report
+description: Something did not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **remove passwords and tokens** from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you run, what did you expect, and what happened instead?
+      placeholder: |
+        I ran `odoobuddy install`, chose Local + Odoo 19 + VS Code, and step 6 failed with ...
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Output or log
+      description: |
+        The error shown on screen. The full log path is printed at the start of each run
+        (local: ~/.local/share/odoobuddy/logs/, server: /var/log/odoobuddy/).
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: odoobuddy version
+      description: Output of `odoobuddy --version`
+      placeholder: odoobuddy 0.1.1
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: [Local, Server]
+    validations:
+      required: true
+  - type: input
+    id: odoo
+    attributes:
+      label: Odoo version and edition
+      placeholder: 19.0 Enterprise
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: editor
+    attributes:
+      label: Editor (local mode)
+      placeholder: VS Code 1.105 / PyCharm 2026.1 / none

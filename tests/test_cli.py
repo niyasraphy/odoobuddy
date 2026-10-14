@@ -123,3 +123,24 @@ def test_tab_completion_for_commands_and_instance_names(isolated, make_instance,
     assert complete("odoobuddy st", 1) == ["start", "stop"]
     assert complete("odoobuddy start ", 2) == ["hr", "shop"]
     assert complete("odoobuddy logs s", 2) == ["shop"]
+
+
+def test_install_from_a_script_needs_yes():
+    args = [
+        "install",
+        "--mode",
+        "local",
+        "--version",
+        "18.0",
+        "--edition",
+        "community",
+        "--name",
+        "shop",
+        "--port",
+        "18069",
+        "--run-with",
+        "terminal",
+        "--no-repos",
+    ]
+    result = runner.invoke(app, args)
+    assert result.exit_code == 1 and "add --yes" in result.output

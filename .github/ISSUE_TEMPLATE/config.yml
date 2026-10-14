@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://niyasraphy.github.io/odoobuddy/
+    about: Guides for local and server installs, editors, custom repositories and pull.
+  - name: Security issue
+    url: https://github.com/niyasraphy/odoobuddy/security/advisories/new
+    about: Please report security problems privately, not as a public issue.

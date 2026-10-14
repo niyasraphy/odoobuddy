@@ -21,6 +21,15 @@
   reloads itself; each instance has its own debug port.
 - Editors: Cursor, Windsurf, VSCodium and Zed, detected automatically.
 - New commands: `run` (foreground in this terminal) and `open` (open or switch editor).
+- `pull`: copy a production database and filestore over SSH into a local instance,
+  neutralized with Odoo's own `neutralize` (works with non-odoobuddy servers too).
+- Tab completion for commands and instance names (`odoobuddy --install-completion`).
+- The summary menu (install / change a setting / cancel) also appears in dry runs, and
+  dry runs show paths under your home folder as `~/...`.
+- Documentation site, demo GIF, issue and pull request templates, CONTRIBUTING and SECURITY.
+
+### Changed
+- Installing from a script (no terminal) now requires `--yes`.
 
 ## [0.1.0] - 2026-10-13
 

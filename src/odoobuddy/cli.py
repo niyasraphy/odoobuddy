@@ -268,12 +268,17 @@ def install(
     prompter = QuestionaryPrompter(console.print)
     while True:
         console.print(ui.summary(spec))
-        if yes or dry_run:
+        if yes:
             break
+        if not sys.stdin.isatty():
+            if dry_run:
+                break
+            raise _fail("no terminal to confirm the install: add --yes to install from a script")
         try:
+            go = "Show what would be done (dry run)" if dry_run else "Install now"
             choice = prompter.select(
                 "What next?",
-                [("install", "Install now"), ("edit", "Change a setting"), ("cancel", "Cancel")],
+                [("install", go), ("edit", "Change a setting"), ("cancel", "Cancel")],
                 default="install",
             )
             if choice == "install":
@@ -440,7 +445,7 @@ def info(
     rows = [("Status", operations.status(inst)), *ui.instance_details(inst)]
     if inst.mode == "server":
         rows.append(("Domain / SSL", f"{inst.domain or '-'} / {'yes' if inst.ssl else 'no'}"))
-    rows.append(("Created", inst.created_at))
+    rows.append(("Created", inst.created_at.replace("T", " ").replace("+00:00", " UTC")))
     console.print(ui.details_table(rows))
     help_text = ui.ide_help(inst)
     if help_text:

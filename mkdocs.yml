@@ -1,0 +1,46 @@
+site_name: odoobuddy
+site_description: Install and manage multiple Odoo instances on your computer or on production servers.
+site_url: https://niyasraphy.github.io/odoobuddy/
+repo_url: https://github.com/niyasraphy/odoobuddy
+repo_name: niyasraphy/odoobuddy
+edit_uri: edit/main/docs/
+copyright: MIT License · not affiliated with Odoo S.A.
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      toggle: {icon: material/weather-night, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      toggle: {icon: material/weather-sunny, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc: {permalink: true}
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.tabbed: {alternate_style: true}
+  - pymdownx.snippets: {check_paths: true}
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Local development: local.md
+  - Production servers: server.md
+  - Custom repositories: repos.md
+  - Copy production to local: pull.md
+  - Command reference: commands.md
+  - FAQ & troubleshooting: faq.md
+  - Changelog: changelog.md

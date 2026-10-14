@@ -5,6 +5,10 @@
 [![CI](https://github.com/niyasraphy/odoobuddy/actions/workflows/ci.yml/badge.svg)](https://github.com/niyasraphy/odoobuddy/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/pypi/l/odoobuddy)](LICENSE)
 
+![odoobuddy demo](https://raw.githubusercontent.com/niyasraphy/odoobuddy/main/docs/assets/demo.gif)
+
+📖 **Documentation:** https://niyasraphy.github.io/odoobuddy/
+
 **Install and manage many Odoo instances, of any version, on your laptop or on production servers, with one command.**
 
 ```bash
@@ -57,6 +61,8 @@ and admin password yourself.
   - a **ufw firewall** that never locks out your SSH port
   - worker counts tuned to your CPU and RAM
   - log rotation
+- **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
+- **Tab completion** for commands and instance names: `odoobuddy --install-completion`.
 - **Always clear which Odoo you are touching.** Every command shows a banner, production instances are labelled in red, and destructive commands make you type the instance name.
 - **Safe by default.** `--dry-run` everywhere, a backup before production updates, generated passwords, and SQL and passwords passed on stdin, never on the command line.
 
@@ -106,6 +112,7 @@ odoobuddy logs shop            # follow the log (-n 500 --no-follow also work)
 odoobuddy shell shop           # Odoo shell with `env` (--db to pick a database)
 
 odoobuddy update shop          # pull latest code + upgrade modules in every database
+odoobuddy pull root@erp.example.com:shop --into shop-dev   # production copy, neutralized
 odoobuddy backup shop          # database + filestore → zip (Odoo's own format)
 odoobuddy restore backup.zip --name shop --db shop_copy
 odoobuddy remove shop          # asks you to type "shop" to confirm

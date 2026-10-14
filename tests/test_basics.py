@@ -276,3 +276,14 @@ def test_find_ide(monkeypatch, tmp_path):
         '[Desktop Entry]\nName=PyCharm\nExec="/home/u/pycharm-2026.1/bin/pycharm" %f\n'
     )
     assert ide.find_ide("pycharm", desktop_dirs=[str(apps)]) == "/home/u/pycharm-2026.1/bin/pycharm"
+
+
+def test_dry_run_shows_home_as_tilde(monkeypatch, tmp_path):
+    from rich.console import Console
+
+    from odoobuddy.system import Runner
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    console = Console(record=True, width=200)
+    Runner(console=console, dry_run=True).run(["ls", str(tmp_path / "odoo" / "shop")])
+    assert "$ ls ~/odoo/shop" in console.export_text()

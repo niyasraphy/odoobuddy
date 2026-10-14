@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from rich.console import Console
+from rich.markup import escape
 
 
 class CommandError(RuntimeError):
@@ -25,6 +26,12 @@ class CommandError(RuntimeError):
         self.returncode = returncode
         self.output = output
         super().__init__(f"command failed ({returncode}): {shlex.join(self.cmd)}")
+
+
+def short_paths(text: str) -> str:
+    """Show the home folder as ~ so dry-run output stays readable."""
+    home = str(Path.home())
+    return text.replace(home + "/", "~/") if home != "/" else text
 
 
 def is_root() -> bool:
@@ -62,7 +69,7 @@ class Runner:
     ) -> subprocess.CompletedProcess[str]:
         full = self._prefix(sudo=sudo, as_user=as_user) + [str(c) for c in cmd]
         if self.dry_run:
-            self.console.print(f"  [dim]$ {shlex.join(full)}[/dim]")
+            self.console.print(f"  [dim]$ {escape(short_paths(shlex.join(full)))}[/dim]")
             return subprocess.CompletedProcess(full, 0, "", "")
         self._log(f"$ {shlex.join(full)}")
         run_env = {**os.environ, **env} if env else None
@@ -99,7 +106,7 @@ class Runner:
 
     def write_file(self, path: Path, content: str, *, mode: int = 0o644, owner: str | None = None) -> None:
         if self.dry_run:
-            self.console.print(f"  [dim]write {path}[/dim]")
+            self.console.print(f"  [dim]write {escape(short_paths(str(path)))}[/dim]")
             return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
@@ -110,7 +117,7 @@ class Runner:
 
     def mkdir(self, path: Path, *, owner: str | None = None, mode: int = 0o755) -> None:
         if self.dry_run:
-            self.console.print(f"  [dim]mkdir {path}[/dim]")
+            self.console.print(f"  [dim]mkdir {escape(short_paths(str(path)))}[/dim]")
             return
         path.mkdir(parents=True, exist_ok=True)
         path.chmod(mode)
