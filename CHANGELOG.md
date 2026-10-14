@@ -51,8 +51,8 @@
   lines, hints indented under their question, a grouped summary, and the real server IP in
   the "without a domain" hint. The command that repeats the install is now a menu choice
   ("Show the command for scripts"), one option per line, without `sudo` when you are root.
-- During long install steps a little buddy walks along, peeks whether the step is done,
-  checks his watch and has a coffee. `ODOOBUDDY_NO_ANIMATION=1` turns him off.
+- During install steps the letters of "odoo" jump one after another like a wave under the
+  progress line. `ODOOBUDDY_NO_ANIMATION=1` turns it off.
 - Nightly backups on servers: the wizard offers them (on by default), and
   `odoobuddy backup NAME --nightly` / `--no-nightly` turns them on or off later. Every
   database is backed up around 02:30 and the last 7 are kept, in `/var/backups/odoobuddy/NAME/`.

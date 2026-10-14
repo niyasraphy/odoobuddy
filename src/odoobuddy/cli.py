@@ -16,6 +16,7 @@ import typer
 from rich.console import Group
 from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from . import AUTHOR, DOCS_URL, REPO_URL, SUPPORT_EMAIL, __version__, editors, operations, repos, sources, ui
 from . import pull as pull_mod
@@ -597,8 +598,6 @@ def _progress(title: str, action: Callable[[], object], runner: Runner) -> float
         def refresh() -> None:
             now = time.monotonic()
             text = f"{escape(title)}… [dim]{_duration(now - started)}[/dim]"
-            if animate:
-                text += "\n  " + ui.buddy_frame(now - started)
             if last_line:
                 text += f"\n  [dim]{escape(last_line[:110])}[/dim]"
             if _is_apt_lock_wait(last_line):
@@ -611,7 +610,10 @@ def _progress(title: str, action: Callable[[], object], runner: Runner) -> float
                     f"[dim]Full log:[/] {ui.path(runner.log_file)}\n"
                     "  [dim]Ctrl+C is safe: run the same command again to continue where it stopped.[/]"
                 )
-            status.update(text)
+            if animate:
+                status.update(Group(Text.from_markup(text), ui.buddy_frame(now - started)))
+            else:
+                status.update(text)
 
         def on_output(line: str) -> None:
             nonlocal last_line, last_output
@@ -620,7 +622,7 @@ def _progress(title: str, action: Callable[[], object], runner: Runner) -> float
 
         def tick() -> None:
             # Often enough for the buddy to walk smoothly; once a second is enough for the clock.
-            while not done.wait(0.25 if animate else 1):
+            while not done.wait(0.1 if animate else 1):
                 refresh()
 
         threading.Thread(target=tick, daemon=True).start()

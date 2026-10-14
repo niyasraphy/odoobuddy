@@ -394,11 +394,15 @@ def test_apt_busy_ignores_the_shutdown_helper(tmp_path):
     assert apt_busy(tmp_path) == "unattended-upgr"
 
 
-def test_buddy_walks_peeks_and_has_coffee():
+def test_odoo_letters_wave():
     from odoobuddy import ui
 
-    frames = [ui.buddy_frame(t / 4) for t in range(int(ui._CYCLE * 4))]
-    assert all(frames)  # every moment has a frame
-    assert "ᕕ(" in frames[0] and frames[1].count("·") == 1  # walking, one dot per step
-    assert any("coffee break" in f for f in frames) and any("peeking" in f for f in frames)
-    assert ui.buddy_frame(ui._CYCLE) == frames[0]  # and starts over
+    frames = [ui.buddy_frame(t / 10).plain for t in range(int(ui._CYCLE * 10))]
+    assert all(len(f.split("\n")) == 3 for f in frames)  # always the same height: no jumping screen
+    assert all(
+        sorted(f.replace(" ", "").replace("\n", "").replace("▔", "").replace("·", "")) == sorted("odoo")
+        for f in frames
+    )  # always the four letters, nothing else
+    firsts = [f.split("\n")[0].strip() for f in frames]
+    assert firsts[0] == "o" and "o d o o" in firsts  # one letter jumps first, later all together
+    assert ui.buddy_frame(ui._CYCLE).plain == frames[0]  # and starts over

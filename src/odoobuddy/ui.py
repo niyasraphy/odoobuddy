@@ -132,34 +132,37 @@ def instances_table(instances: list[Instance], statuses: dict[str, str], current
     return table
 
 
-# The buddy who keeps you company during long install steps: he walks along the line,
-# peeks whether the step is done, checks his watch and has a coffee, then walks again.
-# Plain characters that every terminal font has; ODOOBUDDY_NO_ANIMATION=1 turns him off.
-BUDDY_TRACK = 24  # how far he walks, in columns
-BUDDY_WALK = ("ᕕ( ᐛ )ᕗ", "ᕕ( ᐖ )ᕗ")
-BUDDY_SCENES = (  # (seconds, figure, what he is doing)
-    (2.0, "(・_・ヾ", "peeking… not done yet"),
-    (2.0, "( •_•)⌚", "checks his watch"),
-    (3.0, "( ˘▽˘)っ☕", "coffee break"),
-    (1.5, "(•‿•)b", "still going, all good"),
-)
-_WALK_SECONDS = BUDDY_TRACK / 6  # he walks at 6 columns per second
-_CYCLE = _WALK_SECONDS + sum(seconds for seconds, _, _ in BUDDY_SCENES)
+# The animation under a long install step: the letters of "odoo" jump one after another
+# like a wave, then all together, rest, and start again. No words, just moves.
+# ODOOBUDDY_NO_ANIMATION=1 turns it off.
+WAVE_LETTERS = "odoo"
+JUMP_SECONDS = 0.3  # how long each letter stays in the air
+REST_SECONDS = 0.5
+_CYCLE = JUMP_SECONDS * (len(WAVE_LETTERS) + 1) + REST_SECONDS  # the wave, one hop together, rest
+_UP, _DOWN = "bold #35c4cb", f"bold {BRAND}"  # a letter in the air is teal, on the ground purple
 
 
-def buddy_frame(elapsed: float) -> str:
-    """The buddy's line ``elapsed`` seconds into a step (markup, one line)."""
+def buddy_frame(elapsed: float) -> Text:
+    """The wave ``elapsed`` seconds into a step: 3 lines (air, ground, shadows), indented."""
     t = elapsed % _CYCLE
-    if t < _WALK_SECONDS:
-        step = int(t * 6)
-        figure = BUDDY_WALK[step % 2]
-        return f"[dim]{'·' * step}[/][{BRAND}]{figure}[/]"
-    t -= _WALK_SECONDS
-    for seconds, figure, doing in BUDDY_SCENES:
-        if t < seconds:
-            return f"[dim]{'·' * BUDDY_TRACK}[/][{BRAND}]{figure}[/]  [dim italic]{doing}[/]"
-        t -= seconds
-    return ""  # not reached: the scenes fill the rest of the cycle
+    wave = len(WAVE_LETTERS) * JUMP_SECONDS
+    if t < wave:
+        up = {int(t // JUMP_SECONDS)}
+    elif t < wave + JUMP_SECONDS:
+        up = set(range(len(WAVE_LETTERS)))  # all together
+    else:
+        up = set()
+    air, ground, shadows = Text("  "), Text("  "), Text("  ")
+    for i, letter in enumerate(WAVE_LETTERS):
+        jumping = i in up
+        air.append(letter if jumping else " ", _UP)
+        ground.append(" " if jumping else letter, _DOWN)
+        shadows.append("·" if jumping else "▔", "dim")  # the shadow shrinks while it is in the air
+        for line in (air, ground, shadows):
+            line.append(" ")
+    art = Text("\n").join([air, ground, shadows])
+    art.rstrip()
+    return art
 
 
 def animations_on() -> bool:
