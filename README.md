@@ -71,7 +71,7 @@ and admin password yourself.
   - log rotation
   - **nightly backups** of every database, the last 7 kept
 - **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
-- **Tab completion** for commands and instance names: `odoobuddy --install-completion`.
+- **Tab completion** for commands, options and instance names, offered after your first install (or `odoobuddy --install-completion`).
 - **Always clear which Odoo you are touching.** Every command shows a banner labelled **PRODUCTION** (red), **TEST** (orange) or **DEV** (green), and destructive commands on production make you type the instance name.
 - **Repeatable.** The summary shows the `odoobuddy install ... --yes` command that repeats the same install from a script, e.g. on a second server.
 - **Safe by default.** `--dry-run` everywhere, a backup before production updates, generated passwords, and SQL and passwords passed on stdin, never on the command line.

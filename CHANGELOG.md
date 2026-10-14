@@ -43,6 +43,10 @@
 - The install summary shows the `odoobuddy install ... --yes` command that repeats the same
   install, and offers "Start over".
 - `doctor` warns when a production instance has no nightly backups.
+- After an install, odoobuddy offers to turn on Tab completion (bash, zsh, fish) when it
+  is not on yet; `odoobuddy --install-completion` still does it by hand.
+- A new welcome screen: framed, with the odoobuddy logo, your instances and the commands
+  to start with.
 - Nightly backups on servers: the wizard offers them (on by default), and
   `odoobuddy backup NAME --nightly` / `--no-nightly` turns them on or off later. Every
   database is backed up around 02:30 and the last 7 are kept, in `/var/backups/odoobuddy/NAME/`.

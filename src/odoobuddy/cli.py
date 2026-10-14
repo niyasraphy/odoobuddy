@@ -38,10 +38,12 @@ from .system import (
     SudoSession,
     apt_busy,
     command_exists,
+    completion_installed,
     cpu_count,
     detect_mode,
     free_disk_gb,
     is_root,
+    login_shell,
     memory_available_mb,
     memory_mb,
     os_release,
@@ -492,6 +494,36 @@ def install(
         f"[dim]Manage it: odoobuddy start|stop|restart|logs|shell|update|backup|info {inst.name}[/]"
     )
     console.print(f"\n[dim]odoobuddy by {AUTHOR} · if it helped, a ⭐ on GitHub is welcome: {REPO_URL}[/]")
+    if not yes and sys.stdin.isatty():
+        _offer_completion(prompter)
+
+
+def _offer_completion(prompter: QuestionaryPrompter) -> None:
+    """After an install, offer Tab completion for odoobuddy, unless it is on already."""
+    shell = login_shell()
+    # Under sudo from another account, it would be set up for root, not for that user.
+    if shell is None or completion_installed(shell) or os.environ.get("SUDO_USER"):
+        return
+    try:
+        if not prompter.confirm(
+            "Turn on Tab completion for odoobuddy commands and instance names?", default=True
+        ):
+            console.print(f"[dim]Later:[/] {ui.cmd('odoobuddy --install-completion')}")
+            return
+        from typer._completion_shared import install as install_completion
+
+        _, path = install_completion(shell=shell, prog_name="odoobuddy")
+    except WizardAbort:
+        return
+    except Exception as exc:  # Typer's installer is internal API: never fail the install over it
+        later = ui.cmd("odoobuddy --install-completion")
+        console.print(f"[yellow]Could not turn on Tab completion ({escape(str(exc))}).[/] Try: {later}")
+        return
+    rc = {"bash": "~/.bashrc", "zsh": "~/.zshrc"}.get(shell)
+    now = f"[dim], or here after:[/] {ui.cmd('source ' + rc)}" if rc else ""
+    console.print(
+        f"[green]✓ Tab completion is on[/] [dim]({ui.path(path)}). It works in new terminals[/]{now}"
+    )
 
 
 def _after_install(runner: Runner, inst: Instance) -> str:

@@ -230,3 +230,29 @@ def test_backup_all_and_nightly(isolated, make_instance, monkeypatch):
     assert empty.exit_code == 0 and "no databases yet" in empty.output
     local = runner.invoke(app, ["backup", "shop", "--nightly"])
     assert local.exit_code == 1 and "for server instances" in local.output
+
+
+def test_offer_tab_completion(tmp_path, monkeypatch):
+    from odoobuddy import cli
+    from odoobuddy.system import completion_installed, login_shell
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    assert login_shell() == "bash" and not completion_installed("bash")
+
+    class Yes:
+        asked = 0
+
+        def confirm(self, message, default=True):
+            Yes.asked += 1
+            return True
+
+    cli._offer_completion(Yes())  # type: ignore[arg-type]
+    assert Yes.asked == 1 and completion_installed("bash")
+    assert "source '" in (tmp_path / ".bashrc").read_text()
+    cli._offer_completion(Yes())  # type: ignore[arg-type]
+    assert Yes.asked == 1  # already on: not asked again
+
+    monkeypatch.setenv("SHELL", "/bin/tcsh")
+    assert login_shell() is None

@@ -279,6 +279,24 @@ def apt_busy(proc: Path = Path("/proc")) -> str | None:
     return None
 
 
+# Where `odoobuddy --install-completion` puts the completion script, per shell.
+COMPLETION_FILES = {
+    "bash": ".bash_completions/odoobuddy.sh",
+    "zsh": ".zfunc/_odoobuddy",
+    "fish": ".config/fish/completions/odoobuddy.fish",
+}
+
+
+def login_shell() -> str | None:
+    """bash, zsh or fish when that is the user's shell (the ones completion supports), else None."""
+    shell = Path(os.environ.get("SHELL", "")).name
+    return shell if shell in COMPLETION_FILES else None
+
+
+def completion_installed(shell: str) -> bool:
+    return (Path.home() / COMPLETION_FILES[shell]).is_file()
+
+
 def detect_mode() -> tuple[Mode, str]:
     """("server" or "local", why): a desktop session means a computer someone works at."""
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
