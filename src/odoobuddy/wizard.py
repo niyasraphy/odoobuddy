@@ -27,6 +27,7 @@ from .models import (
 )
 from .ports import check_port, gevent_port_for, suggest_ports
 from .sources import AccessResult
+from .system import public_ip
 from .versions import major
 
 DOMAIN_RE = re.compile(r"(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
@@ -111,14 +112,6 @@ def resolve_domain(domain: str) -> set[str]:
         return {str(info[4][0]) for info in infos}
     except OSError:
         return set()
-
-
-def public_ip(timeout: float = 5) -> str | None:
-    try:
-        with urllib.request.urlopen("https://api.ipify.org", timeout=timeout) as response:
-            return response.read().decode().strip() or None
-    except OSError:
-        return None
 
 
 @dataclass

@@ -95,3 +95,9 @@ def make_instance(layout: Layout) -> Callable[..., Instance]:
         return Instance(**data)  # type: ignore[arg-type]
 
     return factory
+
+
+@pytest.fixture(autouse=True)
+def no_ip_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Installs never look up the server's IP on the internet during tests."""
+    monkeypatch.setattr("odoobuddy.system.server_address", lambda: "203.0.113.10")

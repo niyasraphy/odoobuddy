@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import postgres, render, sources
+from . import postgres, render, sources, system
 from .layout import Layout
 from .models import IDE_NAMES, InstallSpec, Instance, db_role_for
 from .postgres import client_env, read_db_settings
@@ -138,6 +138,7 @@ class Installer:
             else None,
             domain=spec.domain if spec.mode == "server" else None,
             ssl=spec.ssl and spec.mode == "server" and bool(spec.domain),
+            server_ip=system.server_address() if spec.mode == "server" and not spec.domain else None,
             ide=spec.ide if spec.mode == "local" else "none",
             run_mode=spec.run_mode if spec.mode == "local" else "background",
             created_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),

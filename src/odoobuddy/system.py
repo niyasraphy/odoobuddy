@@ -9,6 +9,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.request
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -236,3 +237,25 @@ def ssh_port() -> int | None:
     if len(parts) == 4 and parts[3].isdigit():
         return int(parts[3])
     return None
+
+
+def public_ip(timeout: float = 5) -> str | None:
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=timeout) as response:
+            return response.read().decode().strip() or None
+    except OSError:
+        return None
+
+
+def server_address() -> str | None:
+    """The IP to open a server without a domain at: the public IP, else the outgoing interface's."""
+    ip = public_ip()
+    if ip:
+        return ip
+    try:
+        # connect() on UDP sends nothing; it only picks the interface used to reach the internet.
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.connect(("8.8.8.8", 80))
+            return str(sock.getsockname()[0])
+    except OSError:
+        return None

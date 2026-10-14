@@ -62,6 +62,9 @@ def test_instance_roundtrip(make_instance):
     data = json.loads(json.dumps(inst.to_dict()))
     assert Instance.from_dict(data) == inst
     assert inst.url == "https://erp.example.com"
+    assert make_instance(mode="server", server_ip="198.51.100.7").url == "http://198.51.100.7:8069"
+    assert make_instance(mode="server").url == "http://SERVER-IP:8069"  # registered before server_ip existed
+    assert make_instance().url == "http://localhost:8069"
     assert inst.service == "odoo-shop" and inst.system_user == "odoo-shop"
 
 

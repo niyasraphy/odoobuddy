@@ -103,6 +103,8 @@ class Instance:
     enterprise_dir: Path | None = None
     domain: str | None = None
     ssl: bool = False
+    # Server without a domain: the IP it is reached at, detected at install time.
+    server_ip: str | None = None
     ide: Ide = "none"
     run_mode: RunMode = "background"
     created_at: str = ""
@@ -154,6 +156,8 @@ class Instance:
     def url(self) -> str:
         if self.domain:
             return f"{'https' if self.ssl else 'http'}://{self.domain}"
+        if self.mode == "server":
+            return f"http://{self.server_ip or 'SERVER-IP'}:{self.http_port}"
         return f"http://localhost:{self.http_port}"
 
     @property

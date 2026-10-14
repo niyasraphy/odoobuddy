@@ -138,6 +138,7 @@ def test_server_without_domain_puts_nginx_on_the_public_port(layout, registry):
     assert "Configure Nginx for port 8069" in titles(inst) and not any("SSL" in t for t in titles(inst))
     conf = render.odoo_conf(inst.instance, db_password="x", master_password="y", workers=3)
     assert "http_port = 18069" in conf and "gevent_port = 18072" in conf
+    assert inst.instance.url == "http://203.0.113.10:8069"
     assert "http_interface = 127.0.0.1" in conf
     site = render.nginx_site(inst.instance)
     assert "listen 8069;" in site and "server_name _;" in site
