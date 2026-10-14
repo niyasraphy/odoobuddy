@@ -59,7 +59,7 @@ def make_ctx(**overrides):
 
 
 def test_local_community_flow():
-    p = Scripted("local", "18.0", "community", "", "", False, "vscode")
+    p = Scripted("development", "18.0", "community", "", "vscode")
     spec = run_wizard(p, make_ctx())
     assert (spec.mode, spec.version, spec.edition, spec.name) == ("local", "18.0", "community", "odoo18")
     assert (spec.http_port, spec.gevent_port, spec.ide) == (8069, 8072, "vscode")
@@ -69,26 +69,26 @@ def test_local_community_flow():
 
 def test_second_instance_gets_next_free_ports_and_name(make_instance):
     existing = make_instance("odoo18")
-    p = Scripted("local", "18.0", "community", "", "", False, "background")
+    p = Scripted("development", "18.0", "community", "", "background")
     spec = run_wizard(p, make_ctx(instances={"odoo18": existing}))
     assert spec.name == "odoo18-2"
     assert (spec.http_port, spec.gevent_port) == (8169, 8172)
 
 
 def test_enterprise_with_valid_token():
-    p = Scripted("local", "19.0", "enterprise", "good", "shop", "8069", False, "pycharm")
+    p = Scripted("development", "19.0", "enterprise", "good", "shop", "pycharm")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "enterprise" and spec.github_token == "good"
 
 
 def test_enterprise_retry_then_success():
-    p = Scripted("local", "19.0", "enterprise", "bad", True, "good", "shop", "8069", False, "background")
+    p = Scripted("development", "19.0", "enterprise", "bad", True, "good", "shop", "background")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "enterprise"
 
 
 def test_enterprise_failure_falls_back_to_community():
-    p = Scripted("local", "19.0", "enterprise", "bad", False, "shop", "8069", False, "background")
+    p = Scripted("development", "19.0", "enterprise", "bad", False, "shop", "background")
     spec = run_wizard(p, make_ctx())
     assert spec.edition == "community" and spec.github_token is None
     assert any("Continuing with Community" in s for s in p.said)
@@ -96,18 +96,17 @@ def test_enterprise_failure_falls_back_to_community():
 
 def test_server_requires_root():
     with pytest.raises(WizardAbort, match="sudo"):
-        run_wizard(Scripted("server"), make_ctx(is_root=False))
+        run_wizard(Scripted("production"), make_ctx(is_root=False))
 
 
 def test_server_with_domain_and_ssl():
     p = Scripted(
-        "server",
+        "production",
         "19.0",
         "community",
         "prod",
         "8069",
         False,
-        True,
         "ERP.Example.com",
         True,
         "me@example.com",
@@ -122,11 +121,11 @@ def test_server_with_domain_and_ssl():
     assert spec.ide == "none"
 
 
-SERVER_START = ("server", "19.0", "community", "prod", "8069", False, True, "erp.example.com")
+SERVER_START = ("production", "19.0", "community", "prod", "8069", False, "erp.example.com")
 
 
 def test_server_dns_not_ready_keep_domain_without_ssl():
-    p = Scripted(*SERVER_START, "keep", False, "3", False, False)
+    p = Scripted(*SERVER_START, "keep", False, "3", False, False, "keep")
     spec = run_wizard(p, make_ctx(is_root=True, public_ip=lambda: "9.9.9.9"))
     assert spec.domain == "erp.example.com"
     assert not spec.ssl and spec.workers == 3 and not spec.firewall
@@ -164,7 +163,7 @@ def test_dns_preset_domain_only_warns():
 
 
 def test_server_without_domain():
-    p = Scripted("server", "18.0", "community", "prod", "8069", False, False, "", True, False)
+    p = Scripted("production", "18.0", "community", "prod", "8069", False, "", "", True, False, "keep")
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain is None and not spec.ssl
     assert any("SERVER-IP:8069" in s for s in p.said)
@@ -222,7 +221,7 @@ def test_installed_ide_is_labelled_and_preselected():
                 seen["choices"], seen["default"] = dict(choices), default
             return super().select(message, choices, default)
 
-    p = Recorder("local", "18.0", "community", "", "", False, "pycharm")
+    p = Recorder("development", "18.0", "community", "", "pycharm")
     ctx = make_ctx(installed_ides={"vscode": None, "pycharm": "/snap/bin/pycharm-community"})
     spec = run_wizard(p, ctx)
     assert spec.ide == "pycharm"
@@ -238,7 +237,7 @@ def test_installed_ide_is_labelled_and_preselected():
 def test_editing_one_setting_only_asks_that_question():
     from odoobuddy.wizard import answers_without, editable_fields
 
-    first = run_wizard(Scripted("local", "18.0", "community", "shop", "8069", False, "vscode"), make_ctx())
+    first = run_wizard(Scripted("development", "18.0", "community", "shop", "vscode"), make_ctx())
     labels = dict(editable_fields(first))
     assert labels["http_port"] == "Port: 8069" and "domain" not in labels
 
@@ -251,9 +250,9 @@ def test_editing_one_setting_only_asks_that_question():
 def test_switching_to_server_asks_the_server_questions():
     from odoobuddy.wizard import answers_without
 
-    first = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, "pycharm"), make_ctx())
-    p = Scripted("server", True, "erp.example.com", True, "", "", False, True)
-    edited = run_wizard(p, make_ctx(is_root=True, preset=answers_without(first, "mode")))
+    first = run_wizard(Scripted("development", "19.0", "community", "shop", "pycharm"), make_ctx())
+    p = Scripted("production", "erp.example.com", True, "", "", False, True, "keep")
+    edited = run_wizard(p, make_ctx(is_root=True, preset=answers_without(first, "purpose")))
     assert edited.mode == "server" and edited.domain == "erp.example.com" and edited.ssl
     assert edited.ide == "none" and edited.name == "shop"
 
@@ -261,9 +260,7 @@ def test_switching_to_server_asks_the_server_questions():
 def test_changing_edition_to_enterprise_asks_for_token():
     from odoobuddy.wizard import answers_without
 
-    first = run_wizard(
-        Scripted("local", "19.0", "community", "shop", "8069", False, "background"), make_ctx()
-    )
+    first = run_wizard(Scripted("development", "19.0", "community", "shop", "background"), make_ctx())
     edited = run_wizard(Scripted("enterprise", "good"), make_ctx(preset=answers_without(first, "edition")))
     assert edited.edition == "enterprise" and edited.github_token == "good"
 
@@ -272,13 +269,12 @@ def test_server_email_left_empty_is_not_asked_again():
     from odoobuddy.wizard import answers_without
 
     p = Scripted(
-        "server",
+        "production",
         "19.0",
         "community",
         "prod",
         "8069",
         False,
-        True,
         "erp.example.com",
         True,
         "",
@@ -294,7 +290,7 @@ def test_server_email_left_empty_is_not_asked_again():
 
 
 def test_server_without_domain_needs_free_internal_ports():
-    p = Scripted("server", "18.0", "community", "prod", "8069", False, False)
+    p = Scripted("production", "18.0", "community", "prod", "8069", False, "")
     with pytest.raises(WizardAbort, match="internal port 18069"):
         run_wizard(p, make_ctx(is_root=True, port_in_use=lambda port: port == 18069))
 
@@ -304,17 +300,17 @@ def test_server_without_domain_needs_free_internal_ports():
     [("terminal", "none", "terminal"), ("background", "none", "background"), ("zed", "zed", "editor")],
 )
 def test_run_mode_choices(answer, ide, mode):
-    spec = run_wizard(Scripted("local", "19.0", "community", "shop", "8069", False, answer), make_ctx())
+    spec = run_wizard(Scripted("development", "19.0", "community", "shop", answer), make_ctx())
     assert (spec.ide, spec.run_mode) == (ide, mode)
 
 
 def test_debug_port_must_be_free():
-    p = Scripted("local", "19.0", "community", "shop", "8069", False, "vscode")
+    p = Scripted("development", "19.0", "community", "shop", "vscode")
     with pytest.raises(WizardAbort, match="debugger needs port 28069"):
         run_wizard(p, make_ctx(port_in_use=lambda port: port == 28069))
 
 
-LOCAL_START = ("local", "18.0", "community", "", "", False)
+LOCAL_START = ("development", "18.0", "community", "")
 
 
 def test_missing_editor_user_installs_it_then_check_again():
@@ -367,21 +363,19 @@ def test_install_editor_survives_changing_another_setting():
     assert "install_editor" not in answers_without(spec, "ide")
 
 
-def test_server_is_offered_first_and_detection_picks_the_default():
+def test_purpose_question_with_detection():
     seen = {}
 
     class Spy(Scripted):
         def select(self, message, choices, default=None):
-            if message.startswith("Where"):
+            if message.startswith("What is this Odoo for"):
                 seen.update(choices=choices, default=default)
             return super().select(message, choices, default)
 
-    with pytest.raises(WizardAbort):  # stop right after the first question
-        run_wizard(
-            Spy("server"), make_ctx(detected_mode="server", detected_reason="connected over SSH, no desktop")
-        )
-    assert [value for value, _ in seen["choices"]] == ["server", "local"]
-    assert seen["default"] == "server" and "detected: connected over SSH" in seen["choices"][0][1]
+    with pytest.raises(WizardAbort):  # stop right after the first question (not root)
+        run_wizard(Spy("production"), make_ctx(detected_mode="server", detected_reason="connected over SSH"))
+    assert [value for value, _ in seen["choices"]] == ["production", "test", "development"]
+    assert seen["default"] == "production" and "detected: connected over SSH" in seen["choices"][0][1]
 
 
 def test_too_many_workers_must_be_lowered():
@@ -394,3 +388,54 @@ def test_too_many_workers_must_be_lowered():
     ctx = make_ctx(is_root=True, max_workers=3, preset={**preset, "repos": [], "domain": None, "workers": 8})
     with pytest.raises(WizardAbort, match="--workers 8 is more than this server can run: at most 3"):
         run_wizard(Scripted(), ctx)
+
+
+def test_test_instance_follows_production_and_stays_small(make_instance):
+    prod = make_instance("erp", version="19.0", mode="server", purpose="production")
+    seen = {}
+
+    class Spy(Scripted):
+        def select(self, message, choices, default=None):
+            seen[message] = default
+            return super().select(message, choices, default)
+
+        def text(self, message, default="", validate=None):
+            seen[message] = default
+            return super().text(message, default, validate)
+
+    # purpose, version, edition, name (default), domain (none), workers (default)
+    p = Spy("test", "19.0", "community", "", "", "")
+    spec = run_wizard(p, make_ctx(is_root=True, instances={"erp": prod}, max_workers=6))
+    assert seen["Which Odoo version?"] == "19.0" and spec.name == "erp-test" and spec.role == "test"
+    assert spec.workers == 2 and not spec.firewall and not spec.daily_backups
+    assert not any("firewall" in q.lower() or "back up" in q.lower() or "port" in q.lower() for q in p.asked)
+    assert not any("Production check" in m for m in p.said)
+
+
+def test_production_check_applies_the_recommendations():
+    # no SSL, no backups, no firewall, 5 workers with 1 GB free
+    p = Scripted(*SERVER_START, "keep", False, "", False, False, "apply")
+    spec = run_wizard(p, make_ctx(is_root=True, available_mb=1024, public_ip=lambda: "9.9.9.9"))
+    assert spec.ssl and spec.daily_backups and spec.firewall and spec.workers == 2
+    assert any("Production check" in m for m in p.said)
+
+
+def test_production_check_only_reports_when_not_interactive():
+    p = Scripted(*SERVER_START, "keep", False, "", False, False)  # no final choice is asked
+    spec = run_wizard(p, make_ctx(is_root=True, interactive=False, public_ip=lambda: "9.9.9.9"))
+    assert not spec.firewall and not spec.daily_backups
+    assert any("Firewall off" in m for m in p.said)
+
+
+def test_production_check_passes_quietly():
+    p = Scripted(*SERVER_START, True, "", "", True, True)
+    run_wizard(p, make_ctx(is_root=True))
+    assert any("✓ Production check" in m for m in p.said)
+
+
+def test_old_mode_preset_still_works():
+    ctx = make_ctx(
+        is_root=True, preset={"mode": "server", "version": "19.0", "edition": "community", "name": "p"}
+    )
+    p = Scripted("8069", False, "", "", True, True)
+    assert run_wizard(p, ctx).role == "production"

@@ -124,7 +124,7 @@ def test_wizard_collects_repos_and_asks_token_for_private_ones():
         return AccessResult(True, "ok")
 
     p = Scripted(
-        "local", "18.0", "community", "", "",
+        "development", "18.0", "community", "",
         True,
         "https://github.com/OCA/web.git", "",            # default branch = 18.0
         "https://github.com/acme/private.git", "17.0", "tok",
@@ -132,7 +132,8 @@ def test_wizard_collects_repos_and_asks_token_for_private_ones():
         "",                                                # empty URL: done
         "background",
     )  # fmt: skip
-    spec = run(p, make_ctx(check_repo=check))
+    # Development asks about repositories only when they are chosen in the summary's "Change a setting".
+    spec = run(p, make_ctx(check_repo=check, preset={"_editing": "repos"}))
     assert spec.repos == [
         RepoSpec("https://github.com/OCA/web.git", "18.0"),
         RepoSpec("https://github.com/acme/private.git", "17.0", token="tok"),

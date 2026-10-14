@@ -19,13 +19,16 @@ odoobuddy install
 The wizard asks a few questions, then sets up everything:
 
 ```
-? Where are you installing Odoo?   Local - my computer, for development
+✓ Ubuntu 24.04 LTS
+✓ 8 CPUs, 16.0 GB RAM (11.2 GB free)
+✓ 180 GB free disk space
+
+? What is this Odoo for?           Development - write and debug modules, on this computer ← detected
 ? Which Odoo version?              Odoo 19.0
 ? Which edition?                   Enterprise
 ? GitHub token with access to odoo/enterprise (input hidden): ****
   ✓ access to odoo/enterprise confirmed
 ? Instance name:                   shop
-? Which port should Odoo run on?   8069
 ? How do you want to run Odoo?     In PyCharm (opens automatically, Odoo runs inside it) - ✓ installed
 
 ✓ [8/10] Test installation (contacts in a temporary database) (1m 12s)
@@ -53,8 +56,13 @@ and admin password yourself.
 - **Community or Enterprise.** Your GitHub token is checked *before* cloning. If it doesn't have access, the wizard offers to retry or continues with Community. The token is never saved to disk, git config or logs.
 - **Many instances side by side.** Run Odoo 17, 18, 19 and 20 at the same time, or several instances of one version. Each instance gets its own Python environment, config, database user, ports, filestore and logs.
 - **The right Python for each version**, installed automatically with [uv](https://github.com/astral-sh/uv). Odoo 16 gets 3.10 and Odoo 19 gets 3.12, with no system Python changes.
-- **Local mode** for development: choose how Odoo runs, either **inside your editor** (VS Code, Cursor, Windsurf, VSCodium, PyCharm or Zed), **in a terminal** or **in the background**. With an editor, it opens automatically after the install and Odoo starts inside it, ready to debug. See [Running Odoo locally](#running-odoo-locally).
-- **Server mode** for production:
+- **Three purposes, each with the right questions and defaults.** The wizard asks what the Odoo is for, and preselects it (a desktop means development, a server over SSH means production):
+  - **Production**: every question, then a *production check* that points out risky choices (no HTTPS, no backups, firewall off, too many workers for the free RAM) and applies the recommended settings with one choice.
+  - **Test / staging**: on the same server as production, with production's version and edition, a name like `erp-test`, 2 workers so production keeps the server, and no backups.
+  - **Development**: on your computer, with only the questions that matter there.
+- **Checks the machine first:** OS, CPUs, RAM, free disk, whether Ubuntu is busy installing updates, another web server on port 80, and the instances already there, before the first question. The worker count is capped at what the server can run next to its other instances.
+- **Development** on your computer: choose how Odoo runs, either **inside your editor** (VS Code, Cursor, Windsurf, VSCodium, PyCharm or Zed), **in a terminal** or **in the background**. With an editor, it opens automatically after the install and Odoo starts inside it, ready to debug. See [Running Odoo locally](#running-odoo-locally).
+- **Production and test servers:**
   - a dedicated system user and a **systemd** service
   - **Nginx** with websocket support, also without a domain: Nginx then serves `http://SERVER-IP:PORT`, so live chat and notifications work with multiple workers
   - free **Let's Encrypt SSL**, after checking that your domain points to the server
@@ -64,7 +72,8 @@ and admin password yourself.
   - **nightly backups** of every database, the last 7 kept
 - **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
 - **Tab completion** for commands and instance names: `odoobuddy --install-completion`.
-- **Always clear which Odoo you are touching.** Every command shows a banner, production instances are labelled in red, and destructive commands make you type the instance name.
+- **Always clear which Odoo you are touching.** Every command shows a banner labelled **PRODUCTION** (red), **TEST** (orange) or **DEV** (green), and destructive commands on production make you type the instance name.
+- **Repeatable.** The summary shows the `odoobuddy install ... --yes` command that repeats the same install from a script, e.g. on a second server.
 - **Safe by default.** `--dry-run` everywhere, a backup before production updates, generated passwords, and SQL and passwords passed on stdin, never on the command line.
 
 ## Running Odoo locally
@@ -188,13 +197,15 @@ Every question has a flag. For example:
 
 ```bash
 export ODOO_GITHUB_TOKEN=ghp_...          # only for Enterprise
-sudo -E odoobuddy install --mode server --version 19.0 --edition enterprise \
+sudo -E odoobuddy install --purpose production --version 19.0 --edition enterprise \
     --name shop --port 8069 --domain erp.example.com --ssl \
-    --email admin@example.com --workers 5 --firewall \
+    --email admin@example.com --workers 5 --firewall --daily-backups \
     --repo https://github.com/OCA/web.git --repo git@github.com:acme/addons.git#19.0 --yes
 ```
 
-Add `--dry-run` to see every command without running anything.
+Add `--dry-run` to see every command without running anything. `--purpose` is `production`,
+`test` or `development`; the older `--mode server|local` still works (server means production).
+In the interactive wizard, the summary shows this command for the answers you gave.
 
 ## Development
 

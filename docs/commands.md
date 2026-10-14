@@ -10,13 +10,17 @@ Run `odoobuddy COMMAND --help` for all options.
 
 | Command | What it does |
 |---|---|
-| `odoobuddy` / `install` | Create an instance (wizard; every question is also a flag) |
-| `list` | All instances with version, mode, port, URL and status |
+| `odoobuddy` | Welcome screen: your instances and the commands to start with |
+| `install` | Create an instance (wizard; every question is also a flag, e.g. `--purpose test`) |
+| `list` | All instances with version, purpose, port, URL and status |
+| `status [NAME]` | Running or stopped, and the address |
 | `info NAME` | Paths, ports, databases, editor steps |
 | `use NAME` | Set the current instance |
 | `remove NAME` | Delete the instance, its databases, files, service and web config |
 | `doctor` | Check the system and every instance |
 | `versions` | Odoo versions available to install |
+| `support` | Documentation, bug reports and contact |
+| `help [COMMAND]`, `-h` | Help for odoobuddy or one command |
 
 ## Running
 
@@ -40,7 +44,8 @@ Run `odoobuddy COMMAND --help` for all options.
 
 | Command | What it does |
 |---|---|
-| `backup NAME [--db DB] [--to DIR]` | Database + filestore → zip (Odoo's own format) |
+| `backup NAME [--db DB \| --all] [--to DIR] [--keep N]` | Database + filestore → zip (Odoo's own format); `--keep` deletes older ones |
+| `backup NAME --nightly` / `--no-nightly` | Server: back up every database each night, the last 7 kept |
 | `restore FILE --db DB [--name NAME]` | Restore a zip into a database (created or replaced) |
 | `pull USER@HOST:INSTANCE --into NAME` | Copy production to local, neutralized ([details](pull.md)) |
 

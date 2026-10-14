@@ -201,3 +201,17 @@ def test_prune_backups_keeps_the_newest(tmp_path, make_instance):
     assert [p.name for p in deleted] == names[:3]
     left = sorted(p.name for p in tmp_path.iterdir())
     assert left == sorted([*names[3:], "shop_main_copy.zip", "shop_other_20261010-023000.zip"])
+
+
+def test_doctor_wants_nightly_backups_for_production(registry, layout, make_instance, monkeypatch):
+    monkeypatch.setattr(operations, "status", lambda inst: operations.STATUS_STOPPED)
+    prod = make_instance("prod", mode="server")
+    registry.add(prod)
+    registry.add(make_instance("stage", mode="server", purpose="test", http_port=8169, gevent_port=8172))
+
+    def backup_checks():
+        return [c for c in operations.doctor(registry) if "backups" in c.message]
+
+    assert [(c.subject, c.ok) for c in backup_checks()] == [("prod", False)]  # test instances are not checked
+    operations.schedule_backups(RecordingRunner(root=True), layout, prod)
+    assert [(c.subject, c.ok) for c in backup_checks()] == [("prod", True)]

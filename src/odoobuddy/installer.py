@@ -177,6 +177,7 @@ class Installer:
             version=spec.version,
             edition=spec.edition,
             mode=spec.mode,
+            purpose=spec.role,
             http_port=spec.http_port,
             gevent_port=spec.gevent_port,
             db_user=db_role_for(spec.name),

@@ -1,11 +1,52 @@
-# Production servers
+# Production and test servers
 
-Run the wizard as root and choose **Server**:
+Run the wizard as root and choose **Production** or **Test / staging** (on a server over SSH,
+Production is preselected):
 
 ```bash
 sudo pipx install odoobuddy     # or: sudo pip install odoobuddy
-sudo odoobuddy
+sudo odoobuddy install
 ```
+
+Before the first question, odoobuddy shows what the server has (OS, CPUs, RAM, free disk),
+whether Ubuntu is busy installing updates, another web server on port 80, and the instances
+already installed.
+
+## Production or test
+
+| | Production | Test / staging |
+|---|---|---|
+| Questions | all of them | version, edition, name, domain, workers |
+| Version and edition | your choice | default to the production instance's |
+| Name | your choice | e.g. `erp-test` next to `erp` |
+| Workers | up to what the server can run | 2 by default, so production keeps the server |
+| Firewall | asked (on by default) | left unchanged |
+| Nightly backups | asked (on by default) | off |
+| Backup before `update` | yes | no |
+| `remove`, `restore`, `update` | type the instance name to confirm | yes/no |
+| Label in every command | red **PRODUCTION** | orange **TEST** |
+
+Settings a test instance does not ask about can still be changed from the summary
+("Change a setting").
+
+### The production check
+
+After the last question, odoobuddy reviews a production install and points out risky
+choices, each with a recommendation:
+
+- no domain, so Odoo uses plain HTTP and passwords travel unencrypted
+- a domain without HTTPS
+- nightly backups off
+- the firewall off
+- more workers than the free RAM can hold
+- too little free disk space
+
+Choose **Apply the recommendations** to fix what can be fixed in one step, or **Keep my
+choices**. A domain cannot be added for you: choose *Change a setting → Domain name* in the
+summary.
+
+The worker question never accepts more than the server can run: its CPUs (2 × CPU + 1) or
+RAM (about 300 MB per worker), minus the workers of the other instances.
 
 ## What gets set up
 
@@ -63,4 +104,5 @@ odoobuddy update shop               # backup, pull new code, upgrade modules
 ```
 
 Production actions (update, restore, remove) ask you to **type the instance name**, and
-every command shows a red **PRODUCTION** label.
+every command shows a red **PRODUCTION** label (orange **TEST** for test instances).
+`odoobuddy doctor` warns when a production instance has no nightly backups.

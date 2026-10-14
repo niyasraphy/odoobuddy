@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import getpass
+import shlex
 
 from rich.console import Console
 from rich.markup import escape
@@ -10,31 +11,41 @@ from rich.panel import Panel
 from rich.table import Table
 
 from .ide import find_ide, install_hint
-from .models import IDE_NAMES, VSCODE_FAMILY, InstallSpec, Instance
+from .models import IDE_NAMES, PURPOSES, VSCODE_FAMILY, InstallSpec, Instance
 
 console = Console()
 
 
+# How each purpose is labelled, so production always stands out.
+PURPOSE_STYLE = {
+    "production": ("PRODUCTION", "red"),
+    "test": ("TEST", "dark_orange"),
+    "development": ("DEV", "green"),
+}
+
+
 def banner(instance: Instance, action: str = "") -> None:
     """Printed before every operation so it is always clear which Odoo is affected."""
-    mode = "[bold white on red] PRODUCTION [/]" if instance.mode == "server" else "[green]LOCAL[/]"
+    label, colour = PURPOSE_STYLE[instance.role]
     where = instance.domain or f"port {instance.http_port}"
     text = (
-        f"[bold]▶ {instance.name}[/] · Odoo {instance.version} {instance.edition.title()} · {mode} · {where}"
+        f"[bold]▶ {instance.name}[/] · Odoo {instance.version} {instance.edition.title()} · "
+        f"[bold white on {colour}] {label} [/] · {where}"
     )
     if action:
         text += f"\n[dim]{action}[/dim]"
-    console.print(Panel(text, expand=False, border_style="red" if instance.mode == "server" else "cyan"))
+    console.print(Panel(text, expand=False, border_style=colour))
 
 
 def instances_table(instances: list[Instance], statuses: dict[str, str], current: str | None) -> Table:
     table = Table(box=None, pad_edge=False, header_style="bold")
-    for col in ("", "NAME", "VERSION", "EDITION", "MODE", "PORT", "URL", "STATUS"):
+    for col in ("", "NAME", "VERSION", "EDITION", "PURPOSE", "PORT", "URL", "STATUS"):
         table.add_column(col)
     for inst in instances:
         state = statuses.get(inst.name, "?")
         dot = "[green]● running[/]" if state == "running" else "[dim]○ stopped[/]"
-        mode = "[red]server[/]" if inst.mode == "server" else "local"
+        label, colour = PURPOSE_STYLE[inst.role]
+        mode = f"[{colour}]{label.lower()}[/]"
         table.add_row(
             "▶" if inst.name == current else "",
             inst.name,
@@ -52,7 +63,10 @@ def summary(spec: InstallSpec) -> Panel:
     rows = [
         ("Instance", spec.name),
         ("Odoo", f"{spec.version} {spec.edition.title()}"),
-        ("Mode", "Server (production)" if spec.mode == "server" else "Local (development)"),
+        (
+            "Purpose",
+            f"{PURPOSES[spec.role]} ({'on this server' if spec.mode == 'server' else 'on this computer'})",
+        ),
         ("Ports", f"{spec.http_port} (web), {spec.gevent_port} (live chat / websocket)"),
     ]
     if spec.mode == "local":
@@ -75,6 +89,32 @@ def summary(spec: InstallSpec) -> Panel:
     for key, value in rows:
         table.add_row(f"[bold]{key}[/]", value)
     return Panel(table, title="Install summary", expand=False)
+
+
+def install_command(spec: InstallSpec) -> str:
+    """The `odoobuddy install` command that repeats this install without questions."""
+    args = ["--purpose", spec.role, "--version", spec.version, "--edition", spec.edition, "--name", spec.name]
+    args += ["--port", str(spec.http_port)]
+    if spec.mode == "local":
+        args += ["--run-with", spec.ide if spec.ide != "none" else spec.run_mode]
+    else:
+        args += ["--domain", spec.domain] if spec.domain else ["--no-domain"]
+        if spec.domain:
+            args.append("--ssl" if spec.ssl else "--no-ssl")
+            if spec.email:
+                args += ["--email", spec.email]
+        args += ["--workers", str(spec.workers)]
+        args.append("--firewall" if spec.firewall else "--no-firewall")
+        args.append("--daily-backups" if spec.daily_backups else "--no-daily-backups")
+    for repo in spec.repos:
+        args += ["--repo", f"{repo.url}#{repo.branch}"]
+    if not spec.repos:
+        args.append("--no-repos")
+    prefix = "sudo -E odoobuddy" if spec.mode == "server" else "odoobuddy"
+    command = f"{prefix} install {shlex.join(args)} --yes"
+    if spec.edition == "enterprise":
+        command = "export ODOO_GITHUB_TOKEN=...  # your token\n" + command
+    return command
 
 
 def _home(path: object) -> str:

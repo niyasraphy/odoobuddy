@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.1.1] - unreleased
+## [0.2.0] - 2026-10-14
 
 ### Fixed
 - Server install on Ubuntu 24.04 failed at "Create Python environment" (`python-ldap`:
@@ -27,6 +27,22 @@
   method, including systemd on servers.
 
 ### Added
+- The wizard starts by asking what the Odoo is for, and adapts to it:
+  - **Production** asks every question, then a *production check* points out risky
+    choices (no HTTPS, no backups, firewall off, more workers than the free RAM can hold,
+    low disk space) and can apply the recommended settings in one step.
+  - **Test / staging** follows the production instance on the server (its version,
+    edition and a name like `erp-test`), uses 2 workers by default and no backups.
+  - **Development** asks only what matters on your computer.
+  The purpose is preselected from where odoobuddy runs, stored with the instance, and
+  shown as a red PRODUCTION, orange TEST or green DEV label in banners and `list`.
+  `--purpose production|test|development` does the same from scripts.
+- Before the first question, the install shows what the machine has (OS, CPUs, RAM, free
+  disk), whether Ubuntu is busy installing updates, another web server on port 80, and the
+  instances already there.
+- The install summary shows the `odoobuddy install ... --yes` command that repeats the same
+  install, and offers "Start over".
+- `doctor` warns when a production instance has no nightly backups.
 - Nightly backups on servers: the wizard offers them (on by default), and
   `odoobuddy backup NAME --nightly` / `--no-nightly` turns them on or off later. Every
   database is backed up around 02:30 and the last 7 are kept, in `/var/backups/odoobuddy/NAME/`.
@@ -37,8 +53,6 @@
   when they look too small, warns and asks "Install anyway, at your own risk?".
 - The number of workers is limited to what the server's CPU and RAM can run next to its
   other instances; a larger number is refused.
-- The wizard detects whether it runs on a server (no desktop, e.g. over SSH) or on your
-  computer, and preselects that; Server is listed first.
 - `odoobuddy` alone shows a welcome screen with your instances and the commands to start with.
 - New commands: `status` (running or stopped, and the address) and `support` (documentation,
   bug reports and contact).
@@ -60,6 +74,12 @@
 - Documentation site, demo GIF, issue and pull request templates, CONTRIBUTING and SECURITY.
 
 ### Changed
+- Only production instances ask you to type their name before `remove`, `restore` and
+  `update`, and only production is backed up before `update`; test and development
+  instances ask yes/no. Server instances installed before this version count as production.
+- The wizard's first question "Where are you installing Odoo?" (local or server) is now
+  "What is this Odoo for?"; `--mode` still works (server = production, local = development).
+- The domain is asked in one question ("Enter" for none) instead of yes/no plus the name.
 - Server instances live in `/opt/odoo/NAME` (was `/opt/odoobuddy/instances/NAME`). Existing
   instances keep their folders and keep working.
 - The install wizard starts with `odoobuddy install`; `odoobuddy` alone shows the welcome screen.

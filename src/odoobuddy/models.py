@@ -12,6 +12,23 @@ Edition = Literal["community", "enterprise"]
 Ide = Literal["vscode", "cursor", "windsurf", "vscodium", "pycharm", "zed", "none"]
 # Local only: open in an editor (Odoo runs inside it), run in a terminal, or in the background.
 RunMode = Literal["editor", "terminal", "background"]
+# What an instance is for. Production and test run on servers, development on your computer.
+Purpose = Literal["production", "test", "development"]
+PURPOSES: dict[str, str] = {
+    "production": "Production",
+    "test": "Test / staging",
+    "development": "Development",
+}
+
+
+def mode_for(purpose: Purpose) -> Mode:
+    return "local" if purpose == "development" else "server"
+
+
+def default_purpose(mode: Mode) -> Purpose:
+    """For instances made before purposes existed: every server was treated as production."""
+    return "production" if mode == "server" else "development"
+
 
 # Display names, in the order the wizard offers them.
 IDE_NAMES: dict[str, str] = {
@@ -73,6 +90,7 @@ class InstallSpec:
     version: str
     mode: Mode
     edition: Edition = "community"
+    purpose: Purpose | None = None  # None: the default for the mode (see default_purpose)
     http_port: int = 8069
     gevent_port: int = 8072
     ide: Ide = "none"
@@ -86,6 +104,10 @@ class InstallSpec:
     daily_backups: bool = False
     repos: list[RepoSpec] = field(default_factory=list)
     github_token: str | None = field(default=None, repr=False)
+
+    @property
+    def role(self) -> Purpose:
+        return self.purpose or default_purpose(self.mode)
 
 
 @dataclass
@@ -114,6 +136,15 @@ class Instance:
     ide: Ide = "none"
     run_mode: RunMode = "background"
     created_at: str = ""
+    purpose: Purpose | None = None  # None in registries written before purposes existed
+
+    @property
+    def role(self) -> Purpose:
+        return self.purpose or default_purpose(self.mode)
+
+    @property
+    def is_production(self) -> bool:
+        return self.role == "production"
 
     @property
     def odoo_bin(self) -> Path:

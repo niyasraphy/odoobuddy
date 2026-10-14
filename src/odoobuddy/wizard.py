@@ -16,13 +16,17 @@ from .models import (
     BACKEND_OFFSET,
     DEBUG_OFFSET,
     IDE_NAMES,
+    PURPOSES,
     Edition,
     Ide,
     InstallSpec,
     Instance,
     Mode,
+    Purpose,
     RepoSpec,
     RunMode,
+    default_purpose,
+    mode_for,
     validate_name,
 )
 from .ports import check_port, gevent_port_for, suggest_ports
@@ -130,6 +134,11 @@ class WizardContext:
     # Where the wizard thinks it runs, and why: the default answer to "local or server".
     detected_mode: Mode = "local"
     detected_reason: str = ""
+    # Free RAM (MB) and disk (GB) for the production check; 0 = unknown, not checked.
+    available_mb: int = 0
+    free_disk_gb: float = 0.0
+    # False when installing from a script (--yes): never stop to ask, only report.
+    interactive: bool = True
     resolve_domain: Callable[[str], set[str]] = resolve_domain
     public_ip: Callable[[], str | None] = public_ip
     preset: dict[str, Any] = field(default_factory=dict)
@@ -165,6 +174,11 @@ def _validate_int(low: int, high: int) -> Callable[[str], str]:
     return check
 
 
+TEST_WORKERS = 2  # default for test instances, which should leave the server to production
+WORKER_MB = 300  # rough RAM of one Odoo worker (same estimate as the installer's)
+MIN_FREE_DISK_GB = 5
+
+
 def _too_many(most: int) -> str:
     return (
         f"at most {most}. Each worker needs about 300 MB of RAM and a share of the CPU; "
@@ -187,38 +201,34 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     pre = ctx.preset
     instances = ctx.instances
 
-    # 1. Local or server
-    detected = f"  ← detected: {ctx.detected_reason}" if ctx.detected_reason else ""
-    mode: Mode = pre.get("mode") or cast(
-        Mode,
-        p.select(
-            "Where are you installing Odoo?",
-            [
-                (
-                    "server",
-                    "Server - production, with service, Nginx and SSL"
-                    + (detected if ctx.detected_mode == "server" else ""),
-                ),
-                (
-                    "local",
-                    "Local - my computer, for development"
-                    + (detected if ctx.detected_mode == "local" else ""),
-                ),
-            ],
-            default=ctx.detected_mode,
-        ),
-    )
+    # 1. What is it for? (decides local or server, and which questions follow)
+    purpose = _purpose_question(p, ctx)
+    mode = mode_for(purpose)
     if mode == "server" and not ctx.is_root:
-        raise WizardAbort("server mode changes system settings, run it with sudo: sudo odoobuddy install")
+        raise WizardAbort(
+            "a server install changes system settings, run it with sudo: sudo odoobuddy install"
+        )
+    # A test instance follows the production one on this server: same version and edition.
+    production = next((i for i in instances.values() if i.role == "production"), None)
+    follow = production if purpose == "test" else None
 
     # 2. Version
     version = pre.get("version")
     if version is None:
         versions = ctx.versions()
+        default_version = follow.version if follow and follow.version in versions else versions[0]
         version = p.select(
             "Which Odoo version?",
-            [(v, f"Odoo {v}" + ("  (latest)" if i == 0 else "")) for i, v in enumerate(versions)],
-            default=versions[0],
+            [
+                (
+                    v,
+                    f"Odoo {v}"
+                    + ("  (latest)" if i == 0 else "")
+                    + ("  (production)" if follow and v == follow.version else ""),
+                )
+                for i, v in enumerate(versions)
+            ],
+            default=default_version,
         )
 
     # 3. Edition (+ GitHub token for Enterprise)
@@ -230,7 +240,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
                 ("community", "Community (free, open source)"),
                 ("enterprise", "Enterprise (needs a GitHub account with access to odoo/enterprise)"),
             ],
-            default="community",
+            default=follow.edition if follow else "community",
         ),
     )
     token: str | None = None
@@ -254,10 +264,12 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
             token = None
 
     # 4. Name
-    default_name = f"odoo{major(version)}"
-    n = 2
+    base = f"odoo{major(version)}"
+    if purpose == "test":
+        base = f"{follow.name}-test" if follow else f"{base}-test"
+    default_name, n = base, 2
     while default_name in instances:
-        default_name, n = f"odoo{major(version)}-{n}", n + 1
+        default_name, n = f"{base}-{n}", n + 1
     name = pre.get("name") or p.text(
         "Instance name (used for folders, service and database):",
         default=default_name,
@@ -276,9 +288,16 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
             return "enter a port number"
         return check_port(int(value), others, ctx.port_in_use)
 
-    http_port = pre.get("http_port") or int(
-        p.text("Which port should Odoo run on?", default=str(http_default), validate=port_ok)
-    )
+    if pre.get("http_port"):
+        http_port = pre["http_port"]
+    elif _asks(ctx, purpose, "http_port"):
+        if http_default != 8069:
+            p.say(
+                f"[dim]Port 8069 and up to {http_default - 1} are used by other instances or programs.[/dim]"
+            )
+        http_port = int(p.text("Which port should Odoo run on?", default=str(http_default), validate=port_ok))
+    else:
+        http_port = http_default  # test and development: the next free port (changeable in the summary)
     error = check_port(int(http_port), others, ctx.port_in_use)
     if error:
         raise WizardAbort(error)
@@ -289,36 +308,71 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         version=version,
         mode=mode,
         edition=edition,
+        purpose=purpose,
         http_port=int(http_port),
         gevent_port=gevent_port,
         github_token=token,
     )
 
-    spec.repos = pre["repos"] if "repos" in pre else _repo_questions(p, ctx, version)
+    # Custom repositories: asked for production; test and development add them from the summary.
+    if "repos" in pre:
+        spec.repos = pre["repos"]
+    elif _asks(ctx, purpose, "repos"):
+        spec.repos = _repo_questions(p, ctx, version)
 
     if mode == "local":
         _run_question(p, ctx, spec)
         return spec
 
     _server_questions(p, ctx, spec)
+    if purpose == "production":
+        _production_check(p, ctx, spec)
     return spec
+
+
+def _asks(ctx: WizardContext, purpose: Purpose, key: str) -> bool:
+    """Production asks every question; test and development only the setting being changed."""
+    return purpose == "production" or ctx.preset.get(EDITING) == key
+
+
+def _purpose_question(p: Prompter, ctx: WizardContext) -> Purpose:
+    pre = ctx.preset
+    if pre.get("purpose"):
+        return cast(Purpose, pre["purpose"])
+    if pre.get("mode"):  # --mode from older scripts: server meant production
+        return default_purpose(pre["mode"])
+    detected = default_purpose(ctx.detected_mode)
+    mark = f"  ← detected: {ctx.detected_reason}" if ctx.detected_reason else ""
+    choices = [
+        ("production", "Production - real company data, on this server"),
+        ("test", "Test / staging - try updates and modules before production, on this server"),
+        ("development", "Development - write and debug modules, on this computer"),
+    ]
+    return cast(
+        Purpose,
+        p.select(
+            "What is this Odoo for?",
+            [(value, label + (mark if value == detected else "")) for value, label in choices],
+            default=detected,
+        ),
+    )
 
 
 def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     pre = ctx.preset
+    production = spec.role == "production"
     dns_ok = False
-    has_domain = (
-        bool(pre.get("domain"))
-        if "domain" in pre
-        else p.confirm("Do you have a domain name for this Odoo (e.g. erp.example.com)?", default=True)
-    )
-    if has_domain:
-        domain = pre.get("domain") or p.text(
-            "Domain name:",
+    if "domain" in pre:
+        domain = pre["domain"] or ""
+    else:
+        example = "erp.example.com" if production else "test.erp.example.com"
+        domain = p.text(
+            f"Domain name (e.g. {example}), or Enter to use the server's IP address:",
             validate=lambda v: (
-                "" if DOMAIN_RE.fullmatch(v.lower()) else "enter a domain like erp.example.com"
+                "" if not v or DOMAIN_RE.fullmatch(v.lower()) else f"enter a domain like {example}"
             ),
         )
+    if domain:
         domain = domain.lower()
         if not DOMAIN_RE.fullmatch(domain):
             raise WizardAbort(f"invalid domain: {domain}")
@@ -355,23 +409,103 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
     most = ctx.max_workers
     if pre.get("workers") and pre["workers"] > most:
         raise WizardAbort(f"--workers {pre['workers']} is more than this server can run: {_too_many(most)}")
-    spec.workers = pre.get("workers") or int(
-        p.text(
-            f"Number of Odoo workers (at most {most} for this server's CPU, RAM and other instances):",
-            default=str(min(ctx.suggested_workers, most)),
-            validate=_validate_workers(most),
+    if pre.get("workers"):
+        spec.workers = pre["workers"]
+    else:
+        # A test instance stays small, so production keeps most of the server.
+        default = min(ctx.suggested_workers if production else TEST_WORKERS, most)
+        p.say("[dim]Workers handle requests in parallel, about 300 MB of RAM each.[/dim]")
+        spec.workers = int(
+            p.text(
+                f"Number of Odoo workers (at most {most} for this server's CPU, RAM and other instances):",
+                default=str(default),
+                validate=_validate_workers(most),
+            )
         )
+    if "firewall" in pre:
+        spec.firewall = pre["firewall"]
+    elif _asks(ctx, spec.role, "firewall"):
+        spec.firewall = p.confirm("Enable the firewall (only SSH and web traffic allowed)?", default=True)
+    if "daily_backups" in pre:
+        spec.daily_backups = pre["daily_backups"]
+    elif _asks(ctx, spec.role, "daily_backups"):
+        spec.daily_backups = p.confirm(
+            "Back up every database each night (the last 7 are kept)?", default=True
+        )
+
+
+def _production_check(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
+    """Point out risky production choices, and offer to apply the recommended ones."""
+    issues: list[tuple[str, str, Callable[[], None] | None]] = []  # (problem, advice, fix)
+    if not spec.domain:
+        issues.append(
+            (
+                "No domain: Odoo uses plain HTTP, so passwords travel unencrypted",
+                "add a domain with HTTPS: choose 'Change a setting' → Domain name in the next menu",
+                None,
+            )
+        )
+    elif not spec.ssl:
+        issues.append(
+            (
+                f"{spec.domain} without HTTPS: passwords travel unencrypted",
+                "turn on the free Let's Encrypt certificate",
+                lambda: setattr(spec, "ssl", True),
+            )
+        )
+    if not spec.daily_backups:
+        issues.append(
+            (
+                "No nightly backups: a broken disk or mistake can lose your data",
+                "turn on nightly backups",
+                lambda: setattr(spec, "daily_backups", True),
+            )
+        )
+    if not spec.firewall:
+        issues.append(
+            (
+                "Firewall off: every open port on this server is reachable from the internet",
+                "turn on the firewall (SSH and web stay open)",
+                lambda: setattr(spec, "firewall", True),
+            )
+        )
+    if ctx.available_mb:
+        fit = max(1, ctx.available_mb // WORKER_MB - 1)  # - 1: the cron process
+        if spec.workers > fit:
+            issues.append(
+                (
+                    f"{ctx.available_mb / 1024:.1f} GB of RAM free for {spec.workers} workers: "
+                    "Odoo may be stopped when memory runs out",
+                    f"use {fit} worker{'s' if fit > 1 else ''}",
+                    lambda: setattr(spec, "workers", fit),
+                )
+            )
+    if ctx.free_disk_gb and ctx.free_disk_gb < MIN_FREE_DISK_GB:
+        issues.append(
+            (
+                f"Only {ctx.free_disk_gb:.1f} GB of free disk space: a full disk can corrupt data",
+                "free up space or add a bigger disk before going live",
+                None,
+            )
+        )
+    if not issues:
+        p.say("[green]✓ Production check: HTTPS, nightly backups, firewall and workers look good[/green]")
+        return
+    p.say("[bold]Production check[/bold]")
+    for problem, advice, _ in issues:
+        p.say(f"[yellow]⚠ {problem}[/yellow]\n  [dim]Recommended: {advice}[/dim]")
+    fixes = [(advice, fix) for _, advice, fix in issues if fix is not None]
+    if not fixes or not ctx.interactive:
+        return
+    choice = p.select(
+        "What do you want to do?",
+        [("apply", "Apply the recommendations"), ("keep", "Keep my choices (at my own risk)")],
+        default="apply",
     )
-    spec.firewall = (
-        pre["firewall"]
-        if "firewall" in pre
-        else p.confirm("Enable the firewall (only SSH and web traffic allowed)?", default=True)
-    )
-    spec.daily_backups = (
-        pre["daily_backups"]
-        if "daily_backups" in pre
-        else p.confirm("Back up every database each night (the last 7 are kept)?", default=True)
-    )
+    if choice == "apply":
+        for advice, fix in fixes:
+            fix()
+            p.say(f"[green]✓ {advice[0].upper() + advice[1:]}[/green]")
 
 
 def _dns_problem(ctx: WizardContext, domain: str, ip: str | None) -> str | None:
@@ -455,10 +589,14 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
             p.say(f"[red]✗ skipped {url}: {result.message}[/red]")
 
 
+# Preset key naming the setting being changed from the summary, so it is asked even when its
+# purpose normally uses the default (e.g. the port of a development instance).
+EDITING = "_editing"
+
 # Settings that can be changed from the summary, and the answers each one invalidates.
 _SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall", "daily_backups")
 EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
-    "mode": ("Local or server", ("mode", "ide", "run_mode", "install_editor", *_SERVER_KEYS)),
+    "purpose": ("Purpose", ("purpose", "mode", "ide", "run_mode", "install_editor", *_SERVER_KEYS)),
     "version": ("Odoo version", ("version",)),
     "edition": ("Edition (Community / Enterprise)", ("edition", "github_token")),
     "name": ("Instance name", ("name",)),
@@ -476,7 +614,7 @@ EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
 def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
     """(key, label with current value) for the settings that apply to this spec."""
     current = {
-        "mode": spec.mode,
+        "purpose": PURPOSES[spec.role],
         "version": spec.version,
         "edition": spec.edition,
         "name": spec.name,
@@ -489,7 +627,7 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
         "firewall": "yes" if spec.firewall else "no",
         "daily_backups": "yes" if spec.daily_backups else "no",
     }
-    keys = ["mode", "version", "edition", "name", "http_port", "repos"]
+    keys = ["purpose", "version", "edition", "name", "http_port", "repos"]
     keys += (
         ["ide"]
         if spec.mode == "local"
@@ -501,6 +639,7 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
 def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
     """The spec's answers as presets, minus the ones that must be asked again to change ``key``."""
     preset: dict[str, Any] = {
+        "purpose": spec.role,
         "mode": spec.mode,
         "version": spec.version,
         "edition": spec.edition,
@@ -522,6 +661,7 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
             preset.update(ssl=spec.ssl, email=spec.email)
     for dropped in EDITABLE[key][1]:
         preset.pop(dropped, None)
+    preset[EDITING] = key
     return preset
 
 

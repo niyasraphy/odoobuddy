@@ -10,8 +10,9 @@ pipx install odoobuddy
 odoobuddy install
 ```
 
-The wizard asks a few questions (local or server, Odoo version, Community or Enterprise,
-port, editor), shows a summary you can change, and sets everything up.
+The wizard checks the machine, asks what the Odoo is for (production, test or development),
+asks only the questions that purpose needs, shows a summary you can change, and sets
+everything up. For production it also reviews risky choices and recommends safer ones.
 
 ## What it does
 

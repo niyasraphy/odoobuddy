@@ -52,11 +52,19 @@ def test_unknown_instance_lists_known_ones(isolated, make_instance):
     assert result.exit_code == 1
 
 
-def test_remove_requires_typing_the_name(isolated, make_instance):
+def test_remove_asks_yes_no_for_development(isolated, make_instance):
     isolated.add(make_instance("shop"))
-    result = runner.invoke(app, ["remove", "shop"], input="wrong\n")
+    result = runner.invoke(app, ["remove", "shop"], input="n\n")
     assert result.exit_code == 1 and "nothing was changed" in result.output
     assert isolated.get("shop") is not None
+
+
+def test_remove_production_requires_typing_the_name(isolated, make_instance, monkeypatch):
+    monkeypatch.setattr("odoobuddy.cli.is_root", lambda: True)
+    isolated.add(make_instance("prod", mode="server"))
+    result = runner.invoke(app, ["remove", "prod"], input="y\n")
+    assert result.exit_code == 1 and "name did not match" in result.output
+    assert isolated.get("prod") is not None
 
 
 def test_install_dry_run_changes_nothing(tmp_path, monkeypatch):

@@ -257,6 +257,28 @@ def prune_old_logs(log_dir: Path, days: int) -> list[Path]:
     return deleted
 
 
+APT_PROCESSES = ("unattended-upgr", "apt", "apt-get", "dpkg")
+
+
+def apt_busy(proc: Path = Path("/proc")) -> str | None:
+    """Name of a package manager that is working right now (it holds apt's lock), or None."""
+    try:
+        for comm in proc.glob("[0-9]*/comm"):
+            try:
+                name = comm.read_text().strip()
+                if name not in APT_PROCESSES:
+                    continue
+                # Always running on Ubuntu, waiting for shutdown: not installing anything.
+                if "unattended-upgrade-shutdown" in (comm.parent / "cmdline").read_text():
+                    continue
+            except OSError:
+                continue  # the process ended meanwhile
+            return name
+    except OSError:
+        pass
+    return None
+
+
 def detect_mode() -> tuple[Mode, str]:
     """("server" or "local", why): a desktop session means a computer someone works at."""
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):

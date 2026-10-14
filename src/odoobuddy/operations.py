@@ -203,7 +203,7 @@ def update(
 
     warnings: list[str] = []
     databases = list_databases(runner, instance)
-    if instance.mode == "server":
+    if instance.is_production:
         for db in databases:
             backup(runner, instance, db, backup_dir or default_backup_dir(instance))
     sources.update(runner, instance.community_dir, instance.version)
@@ -483,6 +483,16 @@ def doctor(registry: Registry) -> list[Check]:
                     )
                 )
             seen[port] = inst.name
+        if inst.is_production:
+            scheduled = backups_scheduled(registry.layout, inst)
+            checks.append(
+                Check(
+                    scheduled,
+                    inst.name,
+                    "nightly backups on" if scheduled else "production without nightly backups",
+                    f"sudo odoobuddy backup {inst.name} --nightly",
+                )
+            )
         running = status(inst) == STATUS_RUNNING
         if not running and port_in_use(inst.http_port):
             checks.append(

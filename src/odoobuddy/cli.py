@@ -22,6 +22,7 @@ from . import pull as pull_mod
 from .ide import detect_ides, editor_install, find_ide, install_hint
 from .installer import (
     CHECK_MODULE,
+    MIN_FREE_DISK_GB,
     Installer,
     processes_in_use,
     resource_warnings,
@@ -35,6 +36,8 @@ from .system import (
     CommandError,
     Runner,
     SudoSession,
+    apt_busy,
+    command_exists,
     cpu_count,
     detect_mode,
     free_disk_gb,
@@ -141,7 +144,12 @@ def _require_root_for(instance: Instance, action: str) -> None:
 
 
 def _confirm_by_typing(instance: Instance, warning: str) -> None:
+    """Production: type the instance name to confirm. Test and development: a yes/no question."""
     console.print(f"[yellow]⚠ {warning}[/yellow]")
+    if not instance.is_production:
+        if not typer.confirm("  Continue?", default=False):
+            raise _fail("nothing was changed")
+        return
     typed = typer.prompt("  Type the instance name to confirm")
     if typed.strip() != instance.name:
         raise _fail("name did not match, nothing was changed")
@@ -174,6 +182,38 @@ def main(
     """With no command, shows a welcome with the instances and the commands to start with."""
     if ctx.invoked_subcommand is None:
         _welcome()
+
+
+def _system_check() -> None:
+    """What this machine has, shown before the first question, so problems show up early."""
+    release = os_release()
+    name = release.get("PRETTY_NAME", "This system")
+    lines = []
+    if (release.get("ID"), release.get("VERSION_CODENAME")) in SUPPORTED_OS:
+        lines.append(f"[green]✓[/] {name}")
+    else:
+        lines.append(f"[yellow]⚠ {name} is not tested[/] [dim](supported: Ubuntu 22.04/24.04, Debian 12)[/]")
+    total, free = memory_mb(), memory_available_mb()
+    if total:
+        lines.append(f"[green]✓[/] {cpu_count()} CPUs, {total / 1024:.1f} GB RAM ({free / 1024:.1f} GB free)")
+    disk = free_disk_gb(_layout().server_root if is_root() else _layout().local_home)
+    mark = "[green]✓[/]" if disk >= MIN_FREE_DISK_GB else "[yellow]⚠[/]"
+    lines.append(f"{mark} {disk:.0f} GB free disk space")
+    if detect_mode()[0] == "server" and port_in_use(80) and not command_exists("nginx"):
+        lines.append(
+            "[yellow]⚠ Port 80 is used by another web server (Apache?)[/] "
+            "[dim]Odoo on a server needs Nginx there; stop the other one first.[/]"
+        )
+    busy = apt_busy()
+    if busy:
+        lines.append(
+            f"[yellow]⚠ Ubuntu is installing updates ({busy})[/] [dim]the install will wait for them[/]"
+        )
+    instances = sorted(_registry().all().values(), key=lambda i: i.name)
+    if instances:
+        listed = ", ".join(f"{i.name} ({i.role}, Odoo {i.version})" for i in instances)
+        lines.append(f"[dim]Already here: {listed}[/]")
+    console.print("\n".join(lines) + "\n")
 
 
 def _check_resources(
@@ -242,7 +282,10 @@ def install(
     name: Optional[str] = typer.Option(None, help="Instance name, e.g. shop"),
     odoo_version: Optional[str] = typer.Option(None, "--version", "-v", help="Odoo version, e.g. 19.0"),
     edition: Optional[str] = typer.Option(None, help="community or enterprise"),
-    mode: Optional[str] = typer.Option(None, help="local or server"),
+    purpose: Optional[str] = typer.Option(
+        None, help="production or test (on this server), or development (on this computer)"
+    ),
+    mode: Optional[str] = typer.Option(None, help="local or server (older name: server = production)"),
     port: Optional[int] = typer.Option(None, help="Web port (websocket port is chosen automatically)"),
     run_with: Optional[str] = typer.Option(
         None,
@@ -273,12 +316,7 @@ def install(
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen, change nothing"),
 ) -> None:
     """Install a new Odoo instance (asks questions for anything not given as an option)."""
-    release = os_release()
-    if (release.get("ID"), release.get("VERSION_CODENAME")) not in SUPPORTED_OS:
-        console.print(
-            f"[yellow]⚠ {release.get('PRETTY_NAME', 'This system')} is not tested. "
-            "Supported: Ubuntu 22.04/24.04, Debian 12.[/yellow]"
-        )
+    _system_check()
 
     preset: dict[str, object] = {}
     for key, value in {
@@ -286,6 +324,7 @@ def install(
         "version": odoo_version,
         "edition": edition,
         "mode": mode,
+        "purpose": purpose,
         "http_port": port,
         "ssl": ssl,
         "email": email,
@@ -318,6 +357,7 @@ def install(
     for key, allowed in (
         ("edition", {"community", "enterprise"}),
         ("mode", {"local", "server"}),
+        ("purpose", {"production", "test", "development"}),
     ):
         if key in preset and preset[key] not in allowed:
             raise _fail(f"--{key} must be one of: {', '.join(sorted(allowed))}")
@@ -336,6 +376,9 @@ def install(
         max_workers=worker_limit(cpu_count(), memory_mb(), processes_in_use(registry.all().values())),
         detected_mode=detected_mode,
         detected_reason=detected_reason,
+        available_mb=memory_available_mb(),
+        free_disk_gb=free_disk_gb(_layout().server_root),
+        interactive=not yes and sys.stdin.isatty(),
         installed_ides=detect_ides(),
         find_ide=find_ide,
         editor_install=editor_install,
@@ -350,8 +393,13 @@ def install(
         raise _fail(str(exc)) from None
 
     prompter = QuestionaryPrompter(console.print)
+    first_preset = dict(preset)
     while True:
         console.print(ui.summary(spec))
+        if not yes:
+            console.print(
+                f"[dim]To repeat this install from a script:[/]\n[dim]{escape(ui.install_command(spec))}[/]"
+            )
         if yes:
             break
         if not sys.stdin.isatty():
@@ -362,7 +410,12 @@ def install(
             go = "Show what would be done (dry run)" if dry_run else "Install now"
             choice = prompter.select(
                 "What next?",
-                [("install", go), ("edit", "Change a setting"), ("cancel", "Cancel")],
+                [
+                    ("install", go),
+                    ("edit", "Change a setting"),
+                    ("restart", "Start over"),
+                    ("cancel", "Cancel"),
+                ],
                 default="install",
             )
             if choice == "install":
@@ -370,6 +423,11 @@ def install(
             if choice == "cancel":
                 console.print("Cancelled, nothing was changed.")
                 raise typer.Exit(1)
+            if choice == "restart":
+                ctx.preset = dict(first_preset)
+                ctx.instances = registry.all()
+                spec = run_wizard(prompter, ctx)
+                continue
             key = prompter.select("Which setting?", editable_fields(spec))
             ctx.preset = answers_without(spec, key)
             ctx.instances = registry.all()
@@ -781,12 +839,12 @@ def update(
     yes: bool = typer.Option(False, "--yes", "-y", help="Do not ask for confirmation"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen"),
 ) -> None:
-    """Pull the latest Odoo code and upgrade modules (backs up server instances first)."""
+    """Pull the latest Odoo code and upgrade modules (backs up production instances first)."""
     inst = _instance(name)
     _require_root_for(inst, "Updating")
     ui.banner(inst, "Update Odoo code, custom repositories and modules")
     if not yes and not dry_run:
-        if inst.mode == "server":
+        if inst.is_production:
             _confirm_by_typing(inst, "This updates a PRODUCTION instance (a backup is made first).")
         elif not typer.confirm("Continue?", default=False):
             raise typer.Exit(1)

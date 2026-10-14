@@ -347,3 +347,40 @@ def test_prune_old_logs_keeps_recent_ones_and_other_files(tmp_path):
     assert prune_old_logs(tmp_path, 30) == [old]
     assert recent.exists() and other.exists()
     assert prune_old_logs(tmp_path / "missing", 30) == []
+
+
+def test_purpose_defaults_for_old_registries_and_repeat_command(make_instance):
+    from odoobuddy import ui
+    from odoobuddy.models import InstallSpec, RepoSpec
+
+    assert make_instance(mode="server").role == "production" and make_instance().role == "development"
+    assert make_instance(mode="server", purpose="test").is_production is False
+    spec = InstallSpec(
+        name="erp", version="19.0", mode="server", purpose="production", edition="enterprise",
+        domain="erp.example.com", ssl=True, workers=3, firewall=True, daily_backups=True,
+        repos=[RepoSpec("https://github.com/OCA/web.git", "19.0")],
+    )  # fmt: skip
+    command = ui.install_command(spec)
+    assert command.startswith("export ODOO_GITHUB_TOKEN")
+    assert "sudo -E odoobuddy install --purpose production --version 19.0" in command
+    assert "--domain erp.example.com --ssl --workers 3 --firewall --daily-backups" in command
+    assert "--repo 'https://github.com/OCA/web.git#19.0'" in command and command.endswith("--yes")  # # quoted
+    local = ui.install_command(InstallSpec(name="dev", version="18.0", mode="local", purpose="development"))
+    assert local.startswith("odoobuddy install --purpose development") and "--run-with background" in local
+
+
+def test_apt_busy_ignores_the_shutdown_helper(tmp_path):
+    from odoobuddy.system import apt_busy
+
+    def process(pid, comm, cmdline):
+        (tmp_path / pid).mkdir()
+        (tmp_path / pid / "comm").write_text(comm + "\n")
+        (tmp_path / pid / "cmdline").write_text(cmdline.replace(" ", "\0"))
+
+    process(
+        "10", "unattended-upgr", "/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown"
+    )
+    process("11", "bash", "bash")
+    assert apt_busy(tmp_path) is None
+    process("12", "unattended-upgr", "/usr/bin/python3 /usr/bin/unattended-upgrade")
+    assert apt_busy(tmp_path) == "unattended-upgr"
