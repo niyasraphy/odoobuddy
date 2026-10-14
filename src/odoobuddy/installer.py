@@ -229,7 +229,22 @@ class Installer:
             env["UV_PYTHON_INSTALL_DIR"] = str(python_dir)
         self.runner.mkdir(inst.instance_dir)
         if not inst.python_bin.exists() or self.runner.dry_run:
-            self.runner.run([uv, "venv", "--seed", "--python", inst.python, str(inst.venv_dir)], env=env)
+            # Only uv-managed Pythons: they ship Python.h, which python-ldap and others need
+            # to compile. A system Python of the same version (Ubuntu 24.04 has 3.12) has no
+            # headers unless python3.X-dev is installed.
+            self.runner.run(
+                [
+                    uv,
+                    "venv",
+                    "--seed",
+                    "--python",
+                    inst.python,
+                    "--python-preference",
+                    "only-managed",
+                    str(inst.venv_dir),
+                ],
+                env=env,
+            )
         packages = EXTRA_PACKAGES + (LOCAL_DEV_PACKAGES if inst.mode == "local" else [])
         requirements = [str(inst.community_dir / "requirements.txt")]
         if inst.custom_dir.is_dir():
