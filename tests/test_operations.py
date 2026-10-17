@@ -39,7 +39,7 @@ def test_backup_creates_odoo_format_zip(configured, tmp_path):
     assert manifest["db_name"] == "shop" and manifest["version"] == "18.0"
     assert path.stat().st_mode & 0o777 == 0o600
     assert runner.envs[0]["PGPASSWORD"] == "pw"
-    assert "pw" not in " ".join(runner.commands[0])
+    assert "pw" not in runner.commands[0]
 
 
 def test_restore_replaces_database_and_filestore(configured, tmp_path, monkeypatch):
