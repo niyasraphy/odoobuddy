@@ -3,7 +3,15 @@ from collections import deque
 import pytest
 
 from odoobuddy.sources import AccessResult
-from odoobuddy.wizard import WizardAbort, WizardContext, run_wizard
+from odoobuddy.wizard import (
+    EDITING,
+    WizardAbort,
+    WizardContext,
+    clean_domain,
+    domain_problem,
+    planned_steps,
+    run_wizard,
+)
 
 
 class Scripted:
@@ -13,6 +21,8 @@ class Scripted:
         self.answers = deque(answers)
         self.asked: list[str] = []
         self.said: list[str] = []
+        self.descriptions: dict[str, dict[str, str]] = {}
+        self.steps: list[tuple[int, int]] = []
 
     def _next(self, message):
         self.asked.append(message)
@@ -20,7 +30,8 @@ class Scripted:
             raise AssertionError(f"unexpected question: {message}")
         return self.answers.popleft()
 
-    def select(self, message, choices, default=None):
+    def select(self, message, choices, default=None, descriptions=None):
+        self.descriptions[message] = descriptions or {}
         answer = self._next(message)
         assert answer in [value for value, _ in choices], (answer, choices)
         return answer
@@ -41,6 +52,9 @@ class Scripted:
 
     def say(self, message):
         self.said.append(message)
+
+    def progress(self, step, total):
+        self.steps.append((step, total))
 
 
 def make_ctx(**overrides):
@@ -65,6 +79,39 @@ def test_local_community_flow():
     assert (spec.http_port, spec.gevent_port, spec.ide) == (8069, 8072, "vscode")
     assert not any("domain" in q.lower() for q in p.asked)  # local never asks about domains
     assert not p.answers
+
+
+def test_step_counter_and_explanations():
+    p = Scripted("development", "18.0", "community", "", "vscode")
+    run_wizard(p, make_ctx())
+    # Purpose is step 1 (asked before the total is known), then version, edition, name, run;
+    # the counter is cleared at the end so later prompts show the plain "?".
+    assert p.steps == [(2, 5), (3, 5), (4, 5), (5, 5), (0, 0)]
+    purposes = p.descriptions["What is this Odoo for?"]
+    assert "10 questions" in purposes["production"] and "6 questions" in purposes["test"]
+    assert "5 questions" in purposes["development"]
+    assert "token" in p.descriptions["Which edition?"]["enterprise"]
+    run = next(d for message, d in p.descriptions.items() if "run Odoo" in message)
+    assert "breakpoints" in run["vscode"] and "Ctrl+C" in run["terminal"]
+
+
+def test_planned_steps_skip_answers_given_as_options():
+    assert planned_steps(make_ctx(), "production") == [
+        "purpose",
+        "version",
+        "edition",
+        "name",
+        "http_port",
+        "repos",
+        "domain",
+        "workers",
+        "firewall",
+        "daily_backups",
+    ]
+    preset = {"purpose": "test", "version": "19.0", "name": "erp-test"}
+    assert planned_steps(make_ctx(preset=preset), "test") == ["edition", "domain", "workers"]
+    # Changing one setting from the summary: no counter.
+    assert planned_steps(make_ctx(preset={EDITING: "version"}), "development") == []
 
 
 def test_second_instance_gets_next_free_ports_and_name(make_instance):
@@ -216,10 +263,10 @@ def test_installed_ide_is_labelled_and_preselected():
     seen = {}
 
     class Recorder(Scripted):
-        def select(self, message, choices, default=None):
+        def select(self, message, choices, default=None, descriptions=None):
             if "run Odoo" in message:
                 seen["choices"], seen["default"] = dict(choices), default
-            return super().select(message, choices, default)
+            return super().select(message, choices, default, descriptions)
 
     p = Recorder("development", "18.0", "community", "", "pycharm")
     ctx = make_ctx(installed_ides={"vscode": None, "pycharm": "/snap/bin/pycharm-community"})
@@ -367,14 +414,15 @@ def test_purpose_question_with_detection():
     seen = {}
 
     class Spy(Scripted):
-        def select(self, message, choices, default=None):
+        def select(self, message, choices, default=None, descriptions=None):
             if message.startswith("What is this Odoo for"):
                 seen.update(choices=choices, default=default)
-            return super().select(message, choices, default)
+            return super().select(message, choices, default, descriptions)
 
     with pytest.raises(WizardAbort):  # stop right after the first question (not root)
         run_wizard(Spy("production"), make_ctx(detected_mode="server", detected_reason="connected over SSH"))
-    assert [value for value, _ in seen["choices"]] == ["production", "test", "development"]
+    # On a server, Development is left out of the menu, with the option to choose it anyway.
+    assert [value for value, _ in seen["choices"]] == ["production", "test"]
     assert seen["default"] == "production" and "detected: connected over SSH" in seen["choices"][0][1]
 
 
@@ -395,9 +443,9 @@ def test_test_instance_follows_production_and_stays_small(make_instance):
     seen = {}
 
     class Spy(Scripted):
-        def select(self, message, choices, default=None):
+        def select(self, message, choices, default=None, descriptions=None):
             seen[message] = default
-            return super().select(message, choices, default)
+            return super().select(message, choices, default, descriptions)
 
         def text(self, message, default="", validate=None):
             seen[message] = default
@@ -439,3 +487,21 @@ def test_old_mode_preset_still_works():
     )
     p = Scripted("8069", False, "", "", True, True)
     assert run_wizard(p, ctx).role == "production"
+
+
+def test_domain_answers_are_cleaned_or_explained():
+    assert clean_domain("  https://ERP.Example.com/web/ ") == "erp.example.com"
+    assert domain_problem("", "erp.example.com") == ""  # Enter: no domain
+    assert domain_problem("https://erp.example.com/", "erp.example.com") == ""
+    assert "no spaces" in domain_problem("erp example.com", "erp.example.com")
+    assert "IP address" in domain_problem("37.231.92.81", "erp.example.com")
+    assert "not complete" in domain_problem("erp", "erp.example.com")
+    assert "not a valid domain" in domain_problem("erp_shop.com", "erp.example.com")
+
+
+def test_development_offered_on_a_desktop_and_by_option_on_a_server():
+    p = Scripted("development", "18.0", "community", "", "vscode")
+    assert run_wizard(p, make_ctx(detected_mode="local")).role == "development"
+    preset = {"purpose": "development"}
+    p = Scripted("18.0", "community", "", "vscode")
+    assert run_wizard(p, make_ctx(detected_mode="server", preset=preset)).role == "development"

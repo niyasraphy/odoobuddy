@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import socket
+import sys
+import textwrap
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
@@ -43,11 +46,59 @@ class WizardAbort(Exception):
 
 
 class Prompter(Protocol):
-    def select(self, message: str, choices: list[tuple[str, str]], default: str | None = None) -> str: ...
+    def select(
+        self,
+        message: str,
+        choices: list[tuple[str, str]],
+        default: str | None = None,
+        descriptions: dict[str, str] | None = None,
+    ) -> str: ...
     def text(self, message: str, default: str = "", validate: Callable[[str], str] | None = None) -> str: ...
     def password(self, message: str) -> str: ...
     def confirm(self, message: str, default: bool = True) -> bool: ...
     def say(self, message: str) -> None: ...
+    def progress(self, step: int, total: int) -> None: ...
+
+
+# Menu colours: the question stands out, the highlighted choice is cyan behind the ▶ pointer,
+# the other choices stay plain, and the how-to hint is grey.
+PROMPT_STYLE = [
+    ("qmark", "fg:ansicyan bold"),
+    ("question", "bold"),
+    ("instruction", "fg:ansibrightblack"),
+    ("pointer", "fg:ansicyan bold"),
+    ("highlighted", "fg:ansicyan bold noreverse"),
+    ("name", "fg:ansiyellow bold"),  # the name part of a choice, e.g. "Production"
+    ("name-highlighted", "fg:ansicyan bold"),
+    ("rest-highlighted", "bold"),
+    ("selected", "noreverse"),
+    ("answer", "fg:ansigreen bold"),
+    ("validation-toolbar", "fg:ansiwhite bg:ansired bold"),  # why a typed answer is not accepted
+]
+MENU_HINT = "(↑ ↓ to move, Enter to choose)"
+NAME_END = re.compile(r" - | \(")  # where a choice's name ends: "Production - ...", "Community (...)"
+
+
+class _Title(list):  # type: ignore[type-arg]
+    """A choice title in two colours: its name, then the rest.
+
+    questionary only highlights plain-text titles, so this one asks the menu whether it is the
+    highlighted choice each time it is drawn.
+    """
+
+    def __init__(self, label: str, is_pointed: Callable[[], bool]) -> None:
+        match = NAME_END.search(label)
+        self.name, self.rest = (label[: match.start()], label[match.start() :]) if match else (label, "")
+        self.is_pointed = is_pointed
+        super().__init__(self._tokens())
+
+    def _tokens(self) -> list[tuple[str, str]]:
+        if self.is_pointed():
+            return [("class:name-highlighted", self.name), ("class:rest-highlighted", self.rest)]
+        return [("class:name", self.name), ("class:text", self.rest)]
+
+    def __iter__(self) -> Any:
+        return iter(self._tokens())
 
 
 class QuestionaryPrompter:
@@ -55,6 +106,16 @@ class QuestionaryPrompter:
 
     def __init__(self, say: Callable[[str], None]) -> None:
         self._say = say
+        self._qmark = "?"
+        self._style: Any = None
+
+    @property
+    def style(self) -> Any:
+        if self._style is None:
+            import questionary
+
+            self._style = questionary.Style(PROMPT_STYLE)
+        return self._style
 
     @staticmethod
     def _ask(question: Any) -> Any:
@@ -63,12 +124,60 @@ class QuestionaryPrompter:
             raise WizardAbort("cancelled")
         return answer
 
-    def select(self, message: str, choices: list[tuple[str, str]], default: str | None = None) -> str:
+    def select(
+        self,
+        message: str,
+        choices: list[tuple[str, str]],
+        default: str | None = None,
+        descriptions: dict[str, str] | None = None,
+    ) -> str:
         import questionary
 
-        items = [questionary.Choice(title=label, value=value) for value, label in choices]
+        # The description of the highlighted choice is shown under the menu, after "  Description: ".
+        # questionary cuts long lines at the terminal's edge, so wrap them here.
+        width = max(30, shutil.get_terminal_size().columns - 17)
+
+        def wrap(text: str | None) -> str | None:
+            return ("\n" + " " * 15).join(textwrap.wrap(text, width)) if text else None
+
+        control: Any = None  # the menu, found once it exists, to know which choice is highlighted
+
+        def pointed(value: str) -> Callable[[], bool]:
+            return lambda: control is not None and control.get_pointed_at().value == value
+
+        # Menus with explanations show each choice's name in its own colour.
+        items: list[Any] = [
+            questionary.Choice(
+                title=_Title(label, pointed(value)) if descriptions else label,
+                value=value,
+                description=wrap((descriptions or {}).get(value)),
+            )
+            for value, label in choices
+        ]
         default_item = next((c for c in items if c.value == default), None)
-        return str(self._ask(questionary.select(message, choices=items, default=default_item)))
+        # Empty lines between the question and the choices, and between the choices and the description.
+        items = [questionary.Separator(" "), *items]
+        if descriptions:
+            items.append(questionary.Separator(" "))
+        self._say("")  # a blank line, so each menu stands apart from the answers above it
+        question = questionary.select(
+            message,
+            choices=items,
+            default=default_item,
+            qmark=self._qmark,
+            pointer="▶",
+            instruction=MENU_HINT,
+            style=self.style,
+        )
+        control = next(
+            (
+                w.content
+                for w in question.application.layout.find_all_windows()
+                if hasattr(w.content, "pointed_at")
+            ),
+            None,
+        )
+        return str(self._ask(question))
 
     def text(self, message: str, default: str = "", validate: Callable[[str], str] | None = None) -> str:
         import questionary
@@ -79,22 +188,51 @@ class QuestionaryPrompter:
             error = validate(value)
             return error or True
 
-        return str(self._ask(questionary.text(message, default=default, validate=check))).strip()
+        return str(
+            self._ask(
+                questionary.text(
+                    message, default=default, validate=check, qmark=self._qmark, style=self.style
+                )
+            )
+        ).strip()
 
     def password(self, message: str) -> str:
         import questionary
 
-        return str(self._ask(questionary.password(message)))
+        return str(self._ask(questionary.password(message, qmark=self._qmark, style=self.style)))
 
     def confirm(self, message: str, default: bool = True) -> bool:
         import questionary
 
         # auto_enter=False: typing y or n only selects; Enter confirms, so a stray key can be corrected.
-        return bool(self._ask(questionary.confirm(message, default=default, auto_enter=False)))
+        question = questionary.confirm(
+            message, default=default, auto_enter=False, qmark=self._qmark, style=self.style
+        )
+        return bool(self._ask(question))
 
     def say(self, message: str) -> None:
         # Indented, so hints and results read as part of the question above them.
         self._say("\n".join("  " + line for line in message.split("\n")))
+
+    def pause(self, message: str = "Press Enter to continue") -> None:
+        """Wait for Enter (any key), so the user reads what is on screen before going on."""
+        import questionary
+
+        try:
+            questionary.press_any_key_to_continue(
+                f"{message}  (Ctrl+C to cancel)", style=self.style
+            ).unsafe_ask()
+        except KeyboardInterrupt:
+            raise WizardAbort("cancelled") from None
+        if sys.stdout.isatty():
+            sys.stdout.write("\x1b[1A\x1b[2K")  # done with: remove the "Press Enter" line
+            sys.stdout.flush()
+        else:
+            self._say("")
+
+    def progress(self, step: int, total: int) -> None:
+        """Show "[step/total]" in front of the next questions (0 = back to the plain "?")."""
+        self._qmark = f"[{step}/{total}]" if step else "?"
 
 
 def resolve_domain(domain: str) -> set[str]:
@@ -199,12 +337,53 @@ def _validate_workers(most: int) -> Callable[[str], str]:
 
 
 def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
+    try:
+        return _run_wizard(p, ctx)
+    finally:
+        p.progress(0, 0)
+
+
+def planned_steps(ctx: WizardContext, purpose: Purpose) -> list[str]:
+    """The main questions this purpose asks, in order (follow-up questions share their step).
+
+    Empty when changing one setting from the summary: then there is nothing to count.
+    """
+    pre = ctx.preset
+    if EDITING in pre:
+        return []
+    asked = {
+        "purpose": not pre.get("purpose") and not pre.get("mode"),
+        "version": pre.get("version") is None,
+        "edition": not pre.get("edition"),
+        "name": not pre.get("name"),
+        "http_port": not pre.get("http_port") and _asks(ctx, purpose, "http_port"),
+        "repos": "repos" not in pre and _asks(ctx, purpose, "repos"),
+    }
+    if mode_for(purpose) == "local":
+        asked["run"] = "ide" not in pre and "run_mode" not in pre
+    else:
+        asked.update(
+            domain="domain" not in pre,
+            workers=not pre.get("workers"),
+            firewall="firewall" not in pre and _asks(ctx, purpose, "firewall"),
+            daily_backups="daily_backups" not in pre and _asks(ctx, purpose, "daily_backups"),
+        )
+    return [key for key, ask in asked.items() if ask]
+
+
+def _run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     pre = ctx.preset
     instances = ctx.instances
 
     # 1. What is it for? (decides local or server, and which questions follow)
     purpose = _purpose_question(p, ctx)
     mode = mode_for(purpose)
+    steps = planned_steps(ctx, purpose)
+
+    def step(key: str) -> None:
+        if key in steps:
+            p.progress(steps.index(key) + 1, len(steps))
+
     if mode == "server" and not ctx.is_root:
         raise WizardAbort(
             "a server install changes system settings, run it with sudo: sudo odoobuddy install"
@@ -216,6 +395,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     # 2. Version
     version = pre.get("version")
     if version is None:
+        step("version")
         versions = ctx.versions()
         default_version = follow.version if follow and follow.version in versions else versions[0]
         version = p.select(
@@ -233,6 +413,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
         )
 
     # 3. Edition (+ GitHub token for Enterprise)
+    step("edition")
     edition: Edition = pre.get("edition") or cast(
         Edition,
         p.select(
@@ -242,6 +423,12 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
                 ("enterprise", "Enterprise (needs a GitHub account with access to odoo/enterprise)"),
             ],
             default=follow.edition if follow else "community",
+            descriptions={
+                "community": "Free and open source, with the main apps: Sales, CRM, Inventory, "
+                "Invoicing, Website and more.",
+                "enterprise": "Odoo's paid edition with extra apps. Needs a GitHub account that Odoo "
+                "gave access to odoo/enterprise, and a token for it (asked next).",
+            },
         ),
     )
     token: str | None = None
@@ -271,6 +458,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     default_name, n = base, 2
     while default_name in instances:
         default_name, n = f"{base}-{n}", n + 1
+    step("name")
     name = pre.get("name") or p.text(
         "Instance name (used for folders, service and database):",
         default=default_name,
@@ -292,6 +480,7 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     if pre.get("http_port"):
         http_port = pre["http_port"]
     elif _asks(ctx, purpose, "http_port"):
+        step("http_port")
         if http_default != 8069:
             p.say(
                 f"[dim]Port 8069 and up to {http_default - 1} are used by other instances or programs.[/dim]"
@@ -319,13 +508,14 @@ def run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
     if "repos" in pre:
         spec.repos = pre["repos"]
     elif _asks(ctx, purpose, "repos"):
+        step("repos")
         spec.repos = _repo_questions(p, ctx, version)
 
     if mode == "local":
-        _run_question(p, ctx, spec)
+        _run_question(p, ctx, spec, step)
         return spec
 
-    _server_questions(p, ctx, spec)
+    _server_questions(p, ctx, spec, step)
     if purpose == "production":
         _production_check(p, ctx, spec)
     return spec
@@ -349,37 +539,66 @@ def _purpose_question(p: Prompter, ctx: WizardContext) -> Purpose:
         ("test", "Test / staging - try updates and modules before production, on this server"),
         ("development", "Development - write and debug modules, on this computer"),
     ]
+    descriptions = {
+        "production": "Odoo as a system service behind Nginx, with HTTPS for your domain, "
+        "nightly backups and a firewall. Needs sudo.",
+        "test": "A smaller copy next to production, with the same version and edition, "
+        "to try updates safely. Needs sudo.",
+        "development": "Odoo opens in your code editor (or runs in a terminal), "
+        "ready for breakpoints and module development.",
+    }
+    for purpose in descriptions:
+        descriptions[purpose] += f" {len(planned_steps(ctx, cast(Purpose, purpose)))} questions in all."
+    if detected != "development":
+        # A server has no editor to develop in, so Development is left out (still possible by option).
+        choices = [(value, label) for value, label in choices if value != "development"]
+        p.say(
+            "[dim]Development is not offered on a server. To develop here anyway (e.g. over SSH with "
+            "VS Code Remote): odoobuddy install --purpose development[/dim]"
+        )
     return cast(
         Purpose,
         p.select(
             "What is this Odoo for?",
             [(value, label + (mark if value == detected else "")) for value, label in choices],
             default=detected,
+            descriptions=descriptions,
         ),
     )
 
 
-def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
+def _server_questions(
+    p: Prompter, ctx: WizardContext, spec: InstallSpec, step: Callable[[str], None]
+) -> None:
     pre = ctx.preset
     production = spec.role == "production"
     dns_ok = False
+    example = "erp.example.com" if production else "test.erp.example.com"
     if "domain" in pre:
-        domain = pre["domain"] or ""
+        typed = pre["domain"] or ""
     else:
-        example = "erp.example.com" if production else "test.erp.example.com"
-        domain = p.text(
-            f"Domain name (e.g. {example}), or Enter to use the server's IP address:",
-            validate=lambda v: (
-                "" if not v or DOMAIN_RE.fullmatch(v.lower()) else f"enter a domain like {example}"
-            ),
+        step("domain")
+        p.say(
+            f"[dim]Type the domain people will open Odoo with, e.g. {example}.[/dim]\n"
+            "[dim]No domain? Just press [/dim][bold]Enter[/bold][dim]: Odoo then uses this server's "
+            "IP address.[/dim]"
         )
+        typed = p.text("Domain name (or press Enter to skip):", validate=lambda v: domain_problem(v, example))
+    error = domain_problem(typed, example)
+    if error:
+        raise WizardAbort(f"invalid domain {typed!r}: {error}")
+    domain = clean_domain(typed)
+    if domain and domain != typed.strip():
+        p.say(f"[dim]Using {domain}[/dim]")
     if domain:
-        domain = domain.lower()
-        if not DOMAIN_RE.fullmatch(domain):
-            raise WizardAbort(f"invalid domain: {domain}")
         spec.domain = domain
         dns_ok = _confirm_dns(p, ctx, spec, ask="domain" not in pre)
     if spec.domain:
+        if "ssl" not in pre:
+            p.say(
+                "[dim]HTTPS encrypts passwords and data between the browser and Odoo. "
+                "The certificate is free and renews itself.[/dim]"
+            )
         want_ssl = (
             pre["ssl"]
             if "ssl" in pre
@@ -398,7 +617,11 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
             )
     else:
         ip = ctx.public_ip() or "SERVER-IP"
-        p.say(f"[dim]Without a domain, Odoo will be reachable at http://{ip}:{spec.http_port}[/dim]")
+        p.say(
+            f"→ No domain: Odoo will be reachable at [bold]http://{ip}:{spec.http_port}[/bold]\n"
+            "  [dim]To add one before installing, choose 'Change a setting' → Domain name on the "
+            "review screen.[/dim]"
+        )
 
     if not spec.domain:
         # Nginx takes the public port; Odoo listens internally on the offset ports.
@@ -416,6 +639,7 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
     else:
         # A test instance stays small, so production keeps most of the server.
         default = min(ctx.suggested_workers if production else TEST_WORKERS, most)
+        step("workers")
         p.say("[dim]Workers handle requests in parallel, about 300 MB of RAM each.[/dim]")
         spec.workers = int(
             p.text(
@@ -427,10 +651,20 @@ def _server_questions(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
     if "firewall" in pre:
         spec.firewall = pre["firewall"]
     elif _asks(ctx, spec.role, "firewall"):
+        step("firewall")
+        p.say(
+            "[dim]Closes every port to the internet except SSH and web (ufw), so services "
+            "meant for this server only cannot be reached from outside.[/dim]"
+        )
         spec.firewall = p.confirm("Enable the firewall (only SSH and web traffic allowed)?", default=True)
     if "daily_backups" in pre:
         spec.daily_backups = pre["daily_backups"]
     elif _asks(ctx, spec.role, "daily_backups"):
+        step("daily_backups")
+        p.say(
+            "[dim]Each night every database and its files are saved as a zip on this server. "
+            "Copy them elsewhere too: a backup on the same disk does not survive the disk.[/dim]"
+        )
         spec.daily_backups = p.confirm(
             "Back up every database each night (the last 7 are kept)?", default=True
         )
@@ -508,6 +742,26 @@ def _production_check(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
         for advice, fix in fixes:
             fix()
             p.say(f"[green]✓ {advice[0].upper() + advice[1:]}[/green]")
+
+
+def clean_domain(value: str) -> str:
+    """What the user typed, as a bare domain: lowercase, without http://, a path or a final dot."""
+    value = re.sub(r"^[a-z]+://", "", value.strip().lower())
+    return value.split("/", 1)[0].rstrip(".")
+
+
+def domain_problem(value: str, example: str) -> str:
+    """Why ``value`` is not a domain name, or "" when it is one (or empty: no domain)."""
+    domain = clean_domain(value)
+    if not domain or DOMAIN_RE.fullmatch(domain):
+        return ""
+    if " " in domain:
+        return f"✗ A domain name has no spaces, e.g. {example}"
+    if re.fullmatch(r"[\d.:]+", domain):
+        return "✗ That is an IP address, not a domain. To use the server's IP, clear it and press Enter"
+    if "." not in domain:
+        return f"✗ '{domain}' is not complete: a domain has an ending, e.g. {example}"
+    return f"✗ '{domain}' is not a valid domain name (e.g. {example}). Or clear it and press Enter to skip"
 
 
 def _dns_problem(ctx: WizardContext, domain: str, ip: str | None) -> str | None:
@@ -667,7 +921,7 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
     return preset
 
 
-def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
+def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec, step: Callable[[str], None]) -> None:
     """Local only: open in an editor (Odoo runs inside it), or run in a terminal / background."""
     pre = ctx.preset
     if "ide" in pre or "run_mode" in pre:
@@ -687,7 +941,19 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     # Installed editors first, so the likely answer is at the top.
     order = sorted(IDE_NAMES, key=lambda i: not installed.get(i))
     default = next((i for i in order if installed.get(i)), "terminal")
+    descriptions = {
+        ide: f"Opens the project in {IDE_NAMES[ide]}, set up to run Odoo and debug it with "
+        "breakpoints. Best for writing modules."
+        for ide in order
+    }
+    descriptions.update(
+        terminal="Odoo runs in this terminal and prints its log here; Ctrl+C stops it. "
+        "Good for a quick look.",
+        background="Odoo keeps running after you close the terminal. Good when you use Odoo "
+        "more than you change its code.",
+    )
     spec.install_editor = False
+    step("run")
     while True:
         choice = p.select(
             "How do you want to run Odoo? (only the project is configured, editor settings stay as they are)",
@@ -697,6 +963,7 @@ def _run_question(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
                 ("background", f"In the background (odoobuddy start / stop / logs {spec.name})"),
             ],
             default=default,
+            descriptions=descriptions,
         )
         missing = choice in installed and not installed[choice]
         if not missing or _use_missing_editor(p, ctx, spec, choice):

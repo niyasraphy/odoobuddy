@@ -175,7 +175,48 @@ def section(title: str) -> None:
     console.print(Rule(f"[bold]{escape(title)}[/]", align="left", style=BRAND))
 
 
-def summary(spec: InstallSpec) -> Panel:
+def wizard_intro() -> Panel:
+    """Shown before the first question: how the wizard works, and that nothing happens yet."""
+    text = (
+        "[bold]1.[/] A few questions, one at a time. Each answer decides what comes next:\n"
+        "   Production asks about your domain, HTTPS and backups; Development about your editor.\n"
+        f"[bold]2.[/] {keys('↑ ↓')} to move, {keys('Enter')} to choose. A short explanation of each choice\n"
+        "   is shown under the menu.\n"
+        "[bold]3.[/] [bold]Nothing is installed yet.[/] At the end you review everything you chose, and can\n"
+        "   change any answer, start over or cancel before anything happens.\n\n"
+        f"[dim]{keys('Ctrl+C')} stops at any time, safely.[/]"
+    )
+    return Panel(
+        text,
+        title="[bold] How this works [/]",
+        title_align="left",
+        border_style=BRAND,
+        padding=(1, 2),
+        expand=False,
+    )
+
+
+def summary(spec: InstallSpec, before: InstallSpec | None = None) -> Panel:
+    """The answers, to review before installing. Rows that differ from ``before`` are marked."""
+    old = {key: value for rows in _summary_groups(before) for key, value in rows} if before else {}
+    table = Table.grid(padding=(0, 3))
+    for i, rows in enumerate(_summary_groups(spec)):
+        if i:
+            table.add_row("", "")  # a gap between the groups
+        for key, value in rows:
+            changed = before is not None and old.get(key) != value
+            table.add_row(f"[bold cyan]{key}[/]", value + ("  [bold yellow]← changed[/]" if changed else ""))
+    return Panel(
+        table,
+        title="[bold] Review: nothing is installed yet [/]",
+        title_align="left",
+        border_style=BRAND,
+        padding=(1, 2),
+        expand=False,
+    )
+
+
+def _summary_groups(spec: InstallSpec) -> list[list[tuple[str, str]]]:
     where = "on this server" if spec.mode == "server" else "on this computer"
     groups = [
         [
@@ -208,20 +249,7 @@ def summary(spec: InstallSpec) -> Panel:
         )
     if spec.repos:
         groups.append([("Custom repos", "\n".join(escape(f"{r.url} ({r.branch})") for r in spec.repos))])
-    table = Table.grid(padding=(0, 3))
-    for i, rows in enumerate(groups):
-        if i:
-            table.add_row("", "")  # a gap between the groups
-        for key, value in rows:
-            table.add_row(f"[bold cyan]{key}[/]", value)
-    return Panel(
-        table,
-        title="[bold] Install summary [/]",
-        title_align="left",
-        border_style=BRAND,
-        padding=(1, 2),
-        expand=False,
-    )
+    return groups
 
 
 def install_command(spec: InstallSpec, *, as_root: bool = False) -> str:

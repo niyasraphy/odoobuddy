@@ -321,7 +321,6 @@ def install(
 ) -> None:
     """Install a new Odoo instance (asks questions for anything not given as an option)."""
     _system_check()
-    ui.section("Setup")
 
     preset: dict[str, object] = {}
     for key, value in {
@@ -392,6 +391,17 @@ def install(
         ),
         preset=preset,
     )
+    # Step by step: the machine (shown above), then how the wizard works, then the questions.
+    try:
+        if ctx.interactive:
+            QuestionaryPrompter(console.print).pause()
+        ui.section("Setup")
+        if ctx.interactive:
+            console.print(ui.wizard_intro())
+            QuestionaryPrompter(console.print).pause("Press Enter to start the questions")
+    except WizardAbort:
+        console.print("Cancelled, nothing was changed.")
+        raise typer.Exit(1) from None
     try:
         spec = run_wizard(QuestionaryPrompter(console.print), ctx)
     except WizardAbort as exc:
@@ -399,29 +409,56 @@ def install(
 
     prompter = QuestionaryPrompter(console.print)
     first_preset = dict(preset)
+    before: InstallSpec | None = None  # the answers before the last change, to mark what changed
     while True:
         console.print()
-        console.print(ui.summary(spec))
+        console.print(ui.summary(spec, before))
         if yes:
             break
         if not sys.stdin.isatty():
             if dry_run:
                 break
             raise _fail("no terminal to confirm the install: add --yes to install from a script")
+        console.print("[dim]Check your choices. To fix one, pick 'Change a setting'.[/]")
         try:
-            go = "Show what would be done (dry run)" if dry_run else "Install now"
+            where = "this server" if spec.mode == "server" else "this computer"
             choice = prompter.select(
-                "What next?",
+                "Ready to install?",
                 [
-                    ("install", go),
-                    ("edit", "Change a setting"),
-                    ("command", "Show the command for scripts (same install, no questions)"),
-                    ("restart", "Start over"),
-                    ("cancel", "Cancel"),
+                    ("install", f"Install now - set up Odoo on {where}"),
+                    ("dry-run", "Dry run - only show the steps, nothing is set up"),
+                    ("edit", "Change a setting - fix one answer"),
+                    ("command", "Show the command for scripts - same install, no questions"),
+                    ("restart", "Start over - all questions again"),
+                    ("cancel", "Cancel - nothing is installed"),
                 ],
                 default="install",
+                descriptions={
+                    "install": "Installs Odoo for real with the settings above; each step is shown "
+                    "as it runs.",
+                    "dry-run": "Lists every step and command of the install without running any: nothing "
+                    "is downloaded, installed or changed. To install afterwards, run odoobuddy "
+                    "install again.",
+                    "edit": "Pick one setting: only that question is asked again, then you come back here.",
+                    "command": "Prints an odoobuddy command with these answers, to repeat this install "
+                    "on another machine without questions.",
+                    "restart": "Asks every question again from the beginning.",
+                    "cancel": "Stops here. Nothing has been installed or changed.",
+                },
             )
+            if choice == "install" and spec.mode == "server" and not is_root():
+                # Possible after --dry-run, which lets anyone go through the server questions.
+                console.print(
+                    "[yellow]A server install changes system settings, so it needs sudo.[/] "
+                    "Run this to install with the same answers:"
+                )
+                console.print(escape(ui.install_command(spec)))
+                continue
             if choice == "install":
+                dry_run = False
+                break
+            if choice == "dry-run":
+                dry_run = True
                 break
             if choice == "command":
                 console.print(
@@ -441,12 +478,12 @@ def install(
             if choice == "restart":
                 ctx.preset = dict(first_preset)
                 ctx.instances = registry.all()
-                spec = run_wizard(prompter, ctx)
+                before, spec = None, run_wizard(prompter, ctx)
                 continue
             key = prompter.select("Which setting?", editable_fields(spec))
             ctx.preset = answers_without(spec, key)
             ctx.instances = registry.all()
-            spec = run_wizard(prompter, ctx)
+            before, spec = spec, run_wizard(prompter, ctx)
         except WizardAbort as exc:
             raise _fail(str(exc)) from None
 
@@ -524,14 +561,29 @@ def install(
 def _offer_completion(prompter: QuestionaryPrompter) -> None:
     """After an install, offer Tab completion for odoobuddy, unless it is on already."""
     shell = login_shell()
+    later = ui.cmd("odoobuddy --install-completion")
     # Under sudo from another account, it would be set up for root, not for that user.
-    if shell is None or completion_installed(shell) or os.environ.get("SUDO_USER"):
+    if os.environ.get("SUDO_USER"):
+        console.print(
+            f"\n[dim]Tip: for Tab completion of odoobuddy commands, run as your own user "
+            f"(no sudo):[/] {later}"
+        )
         return
+    if shell is None or completion_installed(shell):
+        return
+    rc = {"bash": "~/.bashrc", "zsh": "~/.zshrc"}.get(shell)
+    adds = f"It adds one line to {rc}, nothing else." if rc else "It adds one file to your shell's settings."
+    console.print(
+        "\n"
+        + ui.heading("Tab completion (optional)")
+        + "\n  Press Tab to finish odoobuddy commands and instance names, like on file names:\n"
+        f"    {ui.cmd('odoobuddy st')}{ui.keys('Tab')}        →  {ui.cmd('odoobuddy start')}\n"
+        f"    {ui.cmd('odoobuddy logs od')}{ui.keys('Tab')}   →  {ui.cmd('odoobuddy logs odoo19')}\n"
+        f"  [dim]Saves typing and typos. {adds}[/]"
+    )
     try:
-        if not prompter.confirm(
-            "Turn on Tab completion for odoobuddy commands and instance names?", default=True
-        ):
-            console.print(f"[dim]Later:[/] {ui.cmd('odoobuddy --install-completion')}")
+        if not prompter.confirm("Turn on Tab completion?", default=True):
+            console.print(f"[dim]Turn it on any time:[/] {later}")
             return
         from typer._completion_shared import install as install_completion
 
@@ -539,10 +591,8 @@ def _offer_completion(prompter: QuestionaryPrompter) -> None:
     except WizardAbort:
         return
     except Exception as exc:  # Typer's installer is internal API: never fail the install over it
-        later = ui.cmd("odoobuddy --install-completion")
         console.print(f"[yellow]Could not turn on Tab completion ({escape(str(exc))}).[/] Try: {later}")
         return
-    rc = {"bash": "~/.bashrc", "zsh": "~/.zshrc"}.get(shell)
     now = f"[dim], or here after:[/] {ui.cmd('source ' + rc)}" if rc else ""
     console.print(
         f"[green]✓ Tab completion is on[/] [dim]({ui.path(path)}). It works in new terminals[/]{now}"

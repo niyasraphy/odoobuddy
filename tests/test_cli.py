@@ -89,7 +89,10 @@ def test_install_dry_run_changes_nothing(tmp_path, monkeypatch):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert "Install summary" in result.output and "Dry run: nothing was changed" in result.output
+    assert (
+        "Review: nothing is installed yet" in result.output
+        and "Dry run: nothing was changed" in result.output
+    )
     assert not (tmp_path / "home" / "odoo" / "shop").exists()
 
 
@@ -202,12 +205,17 @@ def test_small_machine_warns_and_lets_the_user_decide(isolated, monkeypatch):
         "odoobuddy.cli.sys", SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True), argv=[])
     )
     monkeypatch.setattr("odoobuddy.cli.QuestionaryPrompter.select", lambda self, *a, **k: "install")
+    paused = []
+    monkeypatch.setattr("odoobuddy.cli.QuestionaryPrompter.pause", lambda self, *a: paused.append(a))
     monkeypatch.setattr(
         "odoobuddy.cli.QuestionaryPrompter.confirm",
         lambda self, message, default: answers.append(message) or False,
     )
     cancelled = runner.invoke(app, INSTALL_SHOP)
     assert answers == ["Install anyway, at your own risk?"], cancelled.output
+    assert "How this works" in cancelled.output and "Nothing is installed yet" in cancelled.output
+    # Two stops before the questions: after the machine's details, and after "How this works".
+    assert paused == [(), ("Press Enter to start the questions",)]
     assert cancelled.exit_code == 1 and "Cancelled, nothing was changed" in cancelled.output
 
 
@@ -232,7 +240,7 @@ def test_backup_all_and_nightly(isolated, make_instance, monkeypatch):
     assert local.exit_code == 1 and "for server instances" in local.output
 
 
-def test_offer_tab_completion(tmp_path, monkeypatch):
+def test_offer_tab_completion(tmp_path, monkeypatch, capsys):
     from odoobuddy import cli
     from odoobuddy.system import completion_installed, login_shell
 
@@ -250,9 +258,69 @@ def test_offer_tab_completion(tmp_path, monkeypatch):
 
     cli._offer_completion(Yes())  # type: ignore[arg-type]
     assert Yes.asked == 1 and completion_installed("bash")
+    explained = capsys.readouterr().out
+    assert "odoobuddy start" in explained and "one line to ~/.bashrc" in explained
     assert "source '" in (tmp_path / ".bashrc").read_text()
     cli._offer_completion(Yes())  # type: ignore[arg-type]
     assert Yes.asked == 1  # already on: not asked again
 
     monkeypatch.setenv("SHELL", "/bin/tcsh")
     assert login_shell() is None
+
+    # Under sudo: not asked (it would be set up for root), but told how to turn it on.
+    monkeypatch.setenv("SUDO_USER", "someone")
+    cli._offer_completion(Yes())  # type: ignore[arg-type]
+    assert Yes.asked == 1 and "run as your own user" in capsys.readouterr().out
+
+
+def test_summary_marks_changed_settings():
+    from dataclasses import replace
+
+    from odoobuddy import ui
+    from odoobuddy.models import InstallSpec
+
+    spec = InstallSpec(name="shop", version="19.0", mode="local", edition="community", purpose="development")
+    console = ui.Console(width=120)
+    with console.capture() as first:
+        console.print(ui.summary(spec))
+    assert "Review: nothing is installed yet" in first.get() and "changed" not in first.get()
+    with console.capture() as edited:
+        console.print(ui.summary(replace(spec, http_port=8070), spec))
+    lines = [line for line in edited.get().splitlines() if "changed" in line]
+    assert len(lines) == 1 and "8070" in lines[0]
+
+
+def test_review_offers_install_and_dry_run_separately(isolated, monkeypatch):
+    monkeypatch.setattr(
+        "odoobuddy.cli.sys", SimpleNamespace(stdin=SimpleNamespace(isatty=lambda: True), argv=[])
+    )
+    monkeypatch.setattr("odoobuddy.cli.QuestionaryPrompter.pause", lambda self, *a: None)
+    menus = []
+
+    def choose(*answers):
+        queue = list(answers)
+
+        def select(self, message, choices, default=None, descriptions=None):
+            menus.append((message, [value for value, _ in choices], default))
+            return queue.pop(0)
+
+        monkeypatch.setattr("odoobuddy.cli.QuestionaryPrompter.select", select)
+
+    # Started with --dry-run: both options are there, Install now preselected; Dry run changes nothing.
+    choose("dry-run")
+    dry = runner.invoke(app, [*INSTALL_SHOP, "--dry-run"])
+    assert dry.exit_code == 0 and "Dry run: nothing was changed" in dry.output, dry.output
+    message, values, default = menus[-1]
+    assert message == "Ready to install?" and values[:2] == ["install", "dry-run"] and default == "install"
+    assert isolated.get("shop") is None
+
+    # A server install without sudo, after --dry-run: Install now shows the sudo command instead.
+    monkeypatch.setattr("odoobuddy.cli.is_root", lambda: False)
+    choose("install", "cancel")
+    server = [
+        "install", "--purpose", "test", "--version", "18.0", "--edition", "community", "--name", "shop",
+        "--port", "18069", "--no-domain", "--workers", "1", "--no-repos", "--dry-run",
+    ]  # fmt: skip
+    result = runner.invoke(app, server)
+    assert "needs sudo" in result.output and "sudo -E odoobuddy install" in result.output, result.output
+    assert result.exit_code == 1 and "Cancelled, nothing was changed" in result.output

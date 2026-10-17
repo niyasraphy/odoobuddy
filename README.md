@@ -21,20 +21,33 @@ odoobuddy install
 On a server, install it for all users with `sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install odoobuddy`
 (see [Production and test servers](https://niyasraphy.github.io/odoobuddy/server/)).
 
-The wizard asks a few questions, then sets up everything:
+The wizard shows what your machine has, explains how it works, asks a few questions (each
+answer decides the next ones), and lets you review everything before anything is installed:
 
 ```
 ✓ Ubuntu 24.04 LTS
 ✓ 8 CPUs, 16.0 GB RAM (11.2 GB free)
 ✓ 180 GB free disk space
 
-? What is this Odoo for?           Development - write and debug modules, on this computer ← detected
-? Which Odoo version?              Odoo 19.0
-? Which edition?                   Enterprise
-? GitHub token with access to odoo/enterprise (input hidden): ****
+? What is this Odoo for?   Development - write and debug modules, on this computer ← detected
+[2/5] Which Odoo version?   Odoo 19.0
+[3/5] Which edition?   Enterprise
+[3/5] GitHub token with access to odoo/enterprise (input hidden): ****
   ✓ access to odoo/enterprise confirmed
-? Instance name:                   shop
-? How do you want to run Odoo?     In PyCharm (opens automatically, Odoo runs inside it) - ✓ installed
+[4/5] Instance name:   shop
+[5/5] How do you want to run Odoo?   In PyCharm (opens automatically, Odoo runs inside it) - ✓ installed
+
+╭─ Review: nothing is installed yet ──────────╮
+│  Instance   shop                            │
+│  Odoo       19.0 Enterprise                 │
+│  Purpose    Development (on this computer)  │
+│  Runs in    PyCharm                         │
+╰─────────────────────────────────────────────╯
+? Ready to install?
+ ▶ Install now - set up Odoo on this computer
+   Dry run - only show the steps, nothing is set up
+   Change a setting - fix one answer
+   …
 
 ✓ [8/10] Test installation (contacts in a temporary database) (1m 12s)
 
@@ -61,7 +74,8 @@ and admin password yourself.
 - **Community or Enterprise.** Your GitHub token is checked *before* cloning. If it doesn't have access, the wizard offers to retry or continues with Community. The token is never saved to disk, git config or logs.
 - **Many instances side by side.** Run Odoo 17, 18, 19 and 20 at the same time, or several instances of one version. Each instance gets its own Python environment, config, database user, ports, filestore and logs.
 - **The right Python for each version**, installed automatically with [uv](https://github.com/astral-sh/uv). Odoo 16 gets 3.10 and Odoo 19 gets 3.12, with no system Python changes.
-- **Three purposes, each with the right questions and defaults.** The wizard asks what the Odoo is for, and preselects it (a desktop means development, a server over SSH means production):
+- **A wizard that explains itself.** Each question shows its place (`[3/5]`) and a short explanation of the highlighted choice. Nothing is installed until you confirm on the review screen, where you can change any answer, start over, cancel, or do a **dry run** that only shows the steps.
+- **Three purposes, each with the right questions and defaults.** The wizard asks what the Odoo is for, and preselects it (a desktop means development, a server over SSH means production; on a server, Development is only available with `--purpose development`):
   - **Production**: every question, then a *production check* that points out risky choices (no HTTPS, no backups, firewall off, too many workers for the free RAM) and applies the recommended settings with one choice.
   - **Test / staging**: on the same server as production, with production's version and edition, a name like `erp-test`, 2 workers so production keeps the server, and no backups.
   - **Development**: on your computer, with only the questions that matter there.
@@ -76,9 +90,9 @@ and admin password yourself.
   - log rotation
   - **nightly backups** of every database, the last 7 kept
 - **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
-- **Tab completion** for commands, options and instance names, offered after your first install (or `odoobuddy --install-completion`).
+- **Tab completion** for commands, options and instance names (`odoobuddy st` + Tab → `odoobuddy start`), offered after your first install (or `odoobuddy --install-completion`).
 - **Always clear which Odoo you are touching.** Every command shows a banner labelled **PRODUCTION** (red), **TEST** (orange) or **DEV** (green), and destructive commands on production make you type the instance name.
-- **Repeatable.** The summary shows the `odoobuddy install ... --yes` command that repeats the same install from a script, e.g. on a second server.
+- **Repeatable.** The review screen can show the `odoobuddy install ... --yes` command that repeats the same install from a script, e.g. on a second server.
 - **Safe by default.** `--dry-run` everywhere, a backup before production updates, generated passwords, and SQL and passwords passed on stdin, never on the command line.
 
 ## Running Odoo locally
@@ -210,7 +224,7 @@ sudo -E odoobuddy install --purpose production --version 19.0 --edition enterpri
 
 Add `--dry-run` to see every command without running anything. `--purpose` is `production`,
 `test` or `development`; the older `--mode server|local` still works (server means production).
-In the interactive wizard, the summary shows this command for the answers you gave.
+In the interactive wizard, "Show the command for scripts" on the review screen prints this command for the answers you gave.
 
 ## Development
 

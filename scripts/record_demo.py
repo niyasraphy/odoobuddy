@@ -20,7 +20,7 @@ from pathlib import Path
 import pexpect
 
 COLS, ROWS = 100, 30
-DOWN, ENTER, CLEAR = "\x1b[B", "\r", "\x15"
+UP, DOWN, ENTER, CLEAR = "\x1b[A", "\x1b[B", "\r", "\x15"
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -80,22 +80,35 @@ def record(home: Path, cast: Path) -> None:
             child.send(key)
             time.sleep(0.35)
 
+    def pointing_at(child: pexpect.spawn, title: str) -> None:
+        """Stop unless the menu's pointer is on ``title`` (Install now would install for real)."""
+        child.expect(rf"▶ (?:\x1b\[[0-9;]*m)*{title}", timeout=10)
+
     type_command("odoobuddy install --dry-run")
     c = spawn(["install", "--dry-run"])
-    answer(c, "Where are you installing", ENTER)
+    answer(c, "Press Enter to continue", ENTER, pause=2.0)
+    answer(c, "Press Enter to start the questions", ENTER, pause=3.5)
+    # Show the explanations change under the menu, then go back to Development.
+    answer(c, "What is this Odoo for", UP, UP, pause=1.2)
+    time.sleep(1.2)
+    for key in (DOWN, DOWN, ENTER):
+        c.send(key)
+        time.sleep(0.8)
     answer(c, "Which Odoo version", DOWN, ENTER)
     answer(c, "Which edition", ENTER)
     answer(c, "Instance name", CLEAR, *"shop19", ENTER)
-    answer(c, "Which port", ENTER)
-    answer(c, "Clone custom module", "y")
-    answer(c, "Repository URL", *"https://github.com/OCA/web.git", ENTER, pause=0.6)
-    answer(c, "Branch", ENTER, pause=0.5)
-    answer(c, "Repository URL", ENTER, pause=1.2)
     answer(c, "How do you want to run Odoo", ENTER, pause=2.0)
-    answer(c, "What next", DOWN, ENTER, pause=2.5)
-    answer(c, "Which setting", DOWN, DOWN, DOWN, DOWN, ENTER)
+    # Review: Install now, Dry run, Change a setting, ...
+    answer(c, "Ready to install", DOWN, DOWN, pause=2.5)
+    pointing_at(c, "Change a setting")
+    c.send(ENTER)
+    answer(c, "Which setting", DOWN, DOWN, DOWN, DOWN, ENTER)  # Port
     answer(c, "Which port", CLEAR, *"8469", ENTER)
-    answer(c, "What next", ENTER, pause=2.0)
+    # Never Install now here: in a --dry-run session it would install for real.
+    answer(c, "Ready to install", DOWN, pause=2.0)
+    pointing_at(c, "Dry run")
+    time.sleep(1.0)
+    c.send(ENTER)
     c.expect(pexpect.EOF, timeout=120)
     time.sleep(2)
     type_command("odoobuddy list")

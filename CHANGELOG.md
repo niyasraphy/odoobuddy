@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.2.1] - 2026-10-17
+
+### Added
+- The install wizard goes step by step: first what the machine has, then a short "How this
+  works" (each answer decides the next questions; nothing is installed until you confirm),
+  each waiting for Enter, then the questions.
+- Each question shows its place, e.g. `[3/5]`; the total depends on the purpose and leaves out
+  answers given as options. The purpose menu says how many questions each purpose asks.
+- Menus explain the highlighted choice underneath (purpose, edition, how to run Odoo, the
+  review menu), and SSL, firewall and nightly backups get a one-line hint before the question.
+- The review screen ("Review: nothing is installed yet") asks "Ready to install?" with
+  **Install now** preselected and a separate **Dry run** (only shows the steps), and marks
+  a setting you just changed with `← changed`.
+- After an install, Tab completion is offered with examples of what it does and what it
+  changes (one line in `~/.bashrc`); under sudo, odoobuddy says how to turn it on as your user.
+- Welcome screen (`odoobuddy` alone): a framed header with the odoobuddy logo, and your
+  instances and the main commands in boxes.
+- During long install steps, a small animation (the letters of "odoo" jumping like a wave)
+  shows that odoobuddy is still working; `ODOOBUDDY_NO_ANIMATION=1` turns it off.
+
+### Changed
+- Menus are easier to read: a blank line between the question and the choices, choice names
+  in their own colour, a `▶` pointer on the highlighted one, and "(↑ ↓ to move, Enter to
+  choose)" instead of "(Use arrow keys)".
+- On a server (no desktop session), Development is no longer offered in the purpose menu;
+  `--purpose development` still chooses it.
+- The domain question says that Enter skips it. `https://`, a path or a final dot are removed
+  from what you type, and a wrong domain is explained in red (missing ending, spaces, an IP
+  address) while the question stays open.
+- The install screen is roomier: the machine check in a frame, section lines, indented hints.
+  The command that repeats an install from a script is an option on the review screen.
+
+### Fixed
+- Install instructions: `pip install` fails on Ubuntu 24.04 (`externally-managed-environment`),
+  so the docs only use pipx, add `pipx ensurepath` (after `pipx install`, `odoobuddy` was
+  "command not found"), and install on servers into `/usr/local/bin` so `sudo odoobuddy` works.
+
 ## [0.2.0] - 2026-10-14
 
 ### Fixed

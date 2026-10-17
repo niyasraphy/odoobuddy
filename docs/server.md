@@ -68,6 +68,10 @@ The installer checks that the service answers after starting it.
 
 ## With or without a domain
 
+Type the domain when asked (`https://` or a trailing `/` are removed for you), or just press
+**Enter** to go without one. A mistyped domain is shown in red with what is wrong, e.g. a
+missing ending (`erp` instead of `erp.example.com`) or an IP address instead of a name.
+
 | | With a domain | Without a domain |
 |---|---|---|
 | Address | `https://erp.example.com` | `http://SERVER-IP:8069` |

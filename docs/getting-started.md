@@ -19,11 +19,14 @@ stops with `error: externally-managed-environment`.
 
 Run `odoobuddy install` and answer the questions:
 
-First odoobuddy shows what the machine has (OS, CPUs, RAM, free disk). Then:
+First odoobuddy shows what the machine has (OS, CPUs, RAM, free disk). **Nothing is installed
+while you answer**: at the end you review every answer and can change any of them, start over
+or cancel. Each question shows its place, e.g. `[3/5]` (the number depends on the purpose), and
+moving through a menu shows a short explanation of the highlighted choice.
 
 | Question | Notes |
 |---|---|
-| What is this Odoo for? | **Production** or **Test / staging** (on this server), or **Development** (on this computer). Preselected from where you run it |
+| What is this Odoo for? | **Production** or **Test / staging** (on this server), or **Development** (on this computer). Preselected from where you run it. On a server (no desktop) Development is not offered; use `--purpose development` to choose it anyway |
 | Odoo version | Read live from Odoo's GitHub, so new versions appear automatically |
 | Edition | Enterprise needs a GitHub token with access to `odoo/enterprise` |
 | Instance name | Used for the folder, database user and service, e.g. `shop` |
@@ -36,12 +39,28 @@ First odoobuddy shows what the machine has (OS, CPUs, RAM, free disk). Then:
 A production install ends with a **production check** that points out risky choices and
 can apply the recommended settings. See [Production and test servers](server.md).
 
-Then a summary appears with **Install now / Change a setting / Start over / Cancel**, and
-the command that repeats the same install from a script. "Change a setting" asks only that
-question again.
+Then the review screen (**Review: nothing is installed yet**) lists your answers, with
+**Install now / Dry run / Change a setting / Show the command for scripts / Start over /
+Cancel**. *Dry run* only lists the steps and commands; nothing is set up.
+"Change a setting" asks only that question again, and the review marks what changed
+(`← changed`) so you can check it before installing.
 
 During the install, odoobuddy asks **once** for your sudo password (system packages and
 PostgreSQL), then shows each step with a live progress line and its duration.
+
+## Tab completion
+
+After the first install, odoobuddy offers **Tab completion**: press Tab to finish its commands
+and your instance names, like you do with file names:
+
+```
+odoobuddy st<Tab>        →  odoobuddy start
+odoobuddy logs od<Tab>   →  odoobuddy logs odoo19
+```
+
+It is optional and only adds one line to `~/.bashrc` (or `~/.zshrc`; a file for fish). It works
+in new terminals, or in the current one after `source ~/.bashrc`. Turn it on any time with
+`odoobuddy --install-completion`, as your own user (not with sudo: that would set it up for root).
 
 ## Your first database
 
