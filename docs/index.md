@@ -6,7 +6,9 @@ servers, with one command.**
 ![odoobuddy demo](assets/demo.gif)
 
 ```bash
+sudo apt install pipx        # if you don't have it yet
 pipx install odoobuddy
+pipx ensurepath && source ~/.bashrc   # first time only: puts ~/.local/bin on your PATH
 odoobuddy install
 ```
 

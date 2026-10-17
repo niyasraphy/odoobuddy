@@ -5,10 +5,15 @@
 ```bash
 sudo apt install pipx      # if you don't have it yet
 pipx install odoobuddy
+pipx ensurepath && source ~/.bashrc   # first time only: puts ~/.local/bin on your PATH
 odoobuddy --install-completion   # optional: Tab completion for commands and instance names
 ```
 
-`pip install odoobuddy` works too, but `pipx` keeps it in its own environment.
+If you see `odoobuddy: command not found` right after installing, `~/.local/bin` is not on your
+PATH yet: run `pipx ensurepath`, then open a new terminal (or `source ~/.bashrc`).
+
+Use `pipx`, not `pip`: on Ubuntu 24.04 and newer, `pip install` outside a virtual environment
+stops with `error: externally-managed-environment`.
 
 ## Your first instance
 

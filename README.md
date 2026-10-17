@@ -12,9 +12,14 @@
 **Install and manage many Odoo instances, of any version, on your laptop or on production servers, with one command.**
 
 ```bash
-pipx install odoobuddy      # or: pip install odoobuddy
+sudo apt install pipx        # if you don't have it yet
+pipx install odoobuddy
+pipx ensurepath && source ~/.bashrc   # first time only: puts ~/.local/bin on your PATH
 odoobuddy install
 ```
+
+On a server, install it for all users with `sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install odoobuddy`
+(see [Production and test servers](https://niyasraphy.github.io/odoobuddy/server/)).
 
 The wizard asks a few questions, then sets up everything:
 

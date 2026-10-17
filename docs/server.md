@@ -4,9 +4,15 @@ Run the wizard as root and choose **Production** or **Test / staging** (on a ser
 Production is preselected):
 
 ```bash
-sudo pipx install odoobuddy     # or: sudo pip install odoobuddy
+sudo apt install pipx
+sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx install odoobuddy
 sudo odoobuddy install
 ```
+
+The two variables put the `odoobuddy` command in `/usr/local/bin`, where both `sudo` and every
+user can find it. A plain `sudo pipx install odoobuddy` puts it in `/root/.local/bin`, which is
+not on the PATH and which `sudo` does not search, so you would get `odoobuddy: command not found`.
+To upgrade later: `sudo PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin pipx upgrade odoobuddy`.
 
 Before the first question, odoobuddy shows what the server has (OS, CPUs, RAM, free disk),
 whether Ubuntu is busy installing updates, another web server on port 80, and the instances
