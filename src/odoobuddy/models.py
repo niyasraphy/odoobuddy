@@ -49,6 +49,15 @@ DEBUG_OFFSET = 20000
 NAME_RE = re.compile(r"[a-z][a-z0-9-]{0,30}")
 
 
+DB_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{1,62}")  # Odoo's own rule, within PostgreSQL's limit
+
+
+def validate_db_name(name: str) -> str:
+    if not DB_NAME_RE.fullmatch(name):
+        raise ValueError("use 2-63 letters, digits, '_', '.' or '-', starting with a letter or digit")
+    return name
+
+
 def validate_name(name: str) -> str:
     """Instance names become folder, service, user and database names, so keep them simple."""
     if not NAME_RE.fullmatch(name) or name.endswith("-"):
@@ -102,6 +111,10 @@ class InstallSpec:
     workers: int = 0
     firewall: bool = False
     daily_backups: bool = False
+    # Production only: the first database, and who may use the XML-RPC / JSON-RPC API.
+    db_name: str | None = None
+    country: str | None = None
+    rpc_allow: list[str] = field(default_factory=list)
     repos: list[RepoSpec] = field(default_factory=list)
     github_token: str | None = field(default=None, repr=False)
 
@@ -137,6 +150,9 @@ class Instance:
     run_mode: RunMode = "background"
     created_at: str = ""
     purpose: Purpose | None = None  # None in registries written before purposes existed
+    # Installed with the production protections: database manager closed, RPC API on an allowlist.
+    hardened: bool = False
+    rpc_allow: list[str] = field(default_factory=list)
 
     @property
     def role(self) -> Purpose:

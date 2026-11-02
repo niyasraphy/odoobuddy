@@ -3,9 +3,11 @@ import json
 import pytest
 
 from odoobuddy import installer as installer_mod
+from odoobuddy import postgres, render
 from odoobuddy.installer import Installer, processes_in_use, resource_warnings, worker_limit
 from odoobuddy.models import InstallSpec
 from odoobuddy.registry import MARKER_FILE
+from odoobuddy.system import CommandError
 
 from .conftest import RecordingRunner
 
@@ -92,6 +94,7 @@ def test_server_install(layout, registry, monkeypatch):
         email="me@example.com",
         workers=4,
         firewall=True,
+        country="IN",
     )
     runner = RecordingRunner(root=True)
     inst = Installer(spec, layout=layout, registry=registry, runner=runner)
@@ -119,7 +122,9 @@ def test_server_install(layout, registry, monkeypatch):
 
 
 def test_ssl_failure_does_not_fail_install(layout, registry):
-    spec = InstallSpec(name="prod", version="19.0", mode="server", domain="erp.example.com", ssl=True)
+    spec = InstallSpec(
+        name="prod", version="19.0", mode="server", domain="erp.example.com", ssl=True, country="IN"
+    )
     runner = RecordingRunner(root=True, fail_on="certbot")
     inst = Installer(spec, layout=layout, registry=registry, runner=runner)
     run_all(inst)
@@ -352,3 +357,119 @@ def test_apt_waits_for_automatic_updates(layout, registry):
     assert all("-o DPkg::Lock::Timeout=600" in c for c in runner.joined() if "apt-get" in c)
     assert _is_apt_lock_wait("E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 812")
     assert not _is_apt_lock_wait("Unpacking nginx (1.24.0)")
+
+
+def _production(layout, registry, runner=None, **overrides):
+    data = dict(name="prod", version="19.0", mode="server", purpose="production", country="IN")
+    data.update(overrides)
+    runner = runner or RecordingRunner(root=True)
+    return Installer(InstallSpec(**data), layout=layout, registry=registry, runner=runner), runner
+
+
+def test_production_is_protected(layout, registry):
+    inst, runner = _production(layout, registry, db_name="erp.main", rpc_allow=["203.0.113.10/32"])
+    assert "Create database erp.main" in titles(inst)
+    run_all(inst)
+    conf = (layout.server_root / "prod" / "conf" / "odoo.conf").read_text()
+    assert "list_db = False" in conf and "dbfilter = ^erp\\.main$" in conf
+    site = render.nginx_site(inst.instance)
+    assert "location ~ ^/web/database(/|$)" in site
+    rpc = site.split("location ~ ^/(xmlrpc|jsonrpc)(/|$)")[1].split("}")[0]
+    assert rpc.index("allow 203.0.113.10/32;") < rpc.index("deny all;")
+    assert "NOSUPERUSER" in " ".join(i for i in runner.inputs if i)
+    assert registry.get("prod").hardened and registry.get("prod").rpc_allow == ["203.0.113.10/32"]
+
+
+def test_generated_admin_password_only_travels_on_stdin(layout, registry):
+    inst, runner = _production(layout, registry)
+    run_all(inst)
+    password = inst.credentials.admin_password
+    assert password
+    index = next(i for i, c in enumerate(runner.commands) if "-c" in c and "exp_create_database" in c[-1])
+    assert json.loads(runner.inputs[index])["password"] == password
+    assert json.loads(runner.inputs[index])["country"] == "IN"
+    assert not any(password in part for command in runner.commands for part in command)
+    assert runner.commands[index][:3] == ["runuser", "-u", "odoo-prod"]
+
+
+def test_test_and_development_are_not_protected(layout, registry):
+    spec = InstallSpec(name="erp-test", version="19.0", mode="server", purpose="test")
+    runner = RecordingRunner(root=True)
+    inst = Installer(spec, layout=layout, registry=registry, runner=runner)
+    assert not any(t.startswith("Create database ") and "user" not in t for t in titles(inst))
+    run_all(inst)
+    conf = (layout.server_root / "erp-test" / "conf" / "odoo.conf").read_text()
+    site = render.nginx_site(inst.instance)
+    assert "list_db" not in conf and "dbfilter" not in conf
+    assert "xmlrpc" not in site and "/web/database" not in site
+    assert "NOSUPERUSER" not in " ".join(i for i in runner.inputs if i)
+    assert not registry.get("erp-test").hardened
+    local = Installer(
+        InstallSpec(name="dev", version="19.0", mode="local"),
+        layout=layout,
+        registry=registry,
+        runner=RecordingRunner(),
+    )
+    assert not local.instance.hardened
+
+
+def test_failed_database_is_removed_so_no_default_password_stays(layout, registry):
+    runner = RecordingRunner(root=True)
+    inst, _ = _production(layout, registry, runner=runner)
+    inst.write_config()
+    runner.fail_on = f"runuser -u odoo-prod -- {inst.instance.python_bin} -c"
+    with pytest.raises(CommandError):
+        inst.create_first_database()
+    assert any(c.startswith("dropdb --if-exists --force prod") for c in runner.joined())
+    assert inst.credentials.admin_password is None
+
+
+def _with_answers(*outputs):
+    answers = list(outputs)
+
+    class Answering(RecordingRunner):
+        def run(self, cmd, **kwargs):
+            result = super().run(cmd, **kwargs)
+            if cmd[0] == "psql" and answers:
+                result.stdout = answers.pop(0)
+            return result
+
+    return Answering(root=True)
+
+
+def test_rerun_keeps_a_finished_database(layout, registry):
+    runner = _with_answers("1", "1")
+    inst, _ = _production(layout, registry, runner=runner)
+    inst.write_config()
+    runner.commands.clear()
+    inst.create_first_database()
+    assert inst.credentials.admin_password is None
+    assert any("already existed" in w for w in inst.warnings)
+    assert not any("exp_create_database" in c for c in runner.joined())
+
+
+def test_unfinished_database_is_never_dropped_or_used(layout, registry):
+    runner = _with_answers("1", "")
+    inst, _ = _production(layout, registry, runner=runner)
+    inst.write_config()
+    runner.commands.clear()
+    with pytest.raises(CommandError, match="createdb") as exc:
+        inst.create_first_database()
+    assert "default" in exc.value.output and "dropdb --force prod" in exc.value.output
+    assert not any(c.startswith("dropdb") for c in runner.joined())
+
+
+def test_production_needs_a_country(layout, registry):
+    inst, _ = _production(layout, registry, country=None)
+    inst.write_config()
+    with pytest.raises(ValueError, match="country"):
+        inst.create_first_database()
+
+
+def test_existing_role_loses_superuser_only_when_asked():
+    runner = RecordingRunner()
+    postgres.ensure_role(runner, "odoo_a", "pw", no_superuser=True)
+    postgres.ensure_role(runner, "odoo_b", "pw")
+    assert 'ALTER ROLE "odoo_a" WITH LOGIN CREATEDB NOSUPERUSER' in runner.inputs[0]
+    assert 'ALTER ROLE "odoo_b" WITH LOGIN CREATEDB PASSWORD' in runner.inputs[1]
+    assert "SUPERUSER" not in runner.inputs[0].split("ALTER ROLE")[0]

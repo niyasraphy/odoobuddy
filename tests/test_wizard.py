@@ -57,6 +57,9 @@ class Scripted:
         self.steps.append((step, total))
 
 
+FIRST_DB = ("", "IN", "")  # database name (Enter: the instance name), country, API addresses (none)
+
+
 def make_ctx(**overrides):
     data = dict(
         instances={},
@@ -88,7 +91,7 @@ def test_step_counter_and_explanations():
     # the counter is cleared at the end so later prompts show the plain "?".
     assert p.steps == [(2, 5), (3, 5), (4, 5), (5, 5), (0, 0)]
     purposes = p.descriptions["What is this Odoo for?"]
-    assert "10 questions" in purposes["production"] and "6 questions" in purposes["test"]
+    assert "13 questions" in purposes["production"] and "6 questions" in purposes["test"]
     assert "5 questions" in purposes["development"]
     assert "token" in p.descriptions["Which edition?"]["enterprise"]
     run = next(d for message, d in p.descriptions.items() if "run Odoo" in message)
@@ -107,6 +110,9 @@ def test_planned_steps_skip_answers_given_as_options():
         "workers",
         "firewall",
         "daily_backups",
+        "db_name",
+        "country",
+        "rpc_allow",
     ]
     preset = {"purpose": "test", "version": "19.0", "name": "erp-test"}
     assert planned_steps(make_ctx(preset=preset), "test") == ["edition", "domain", "workers"]
@@ -160,6 +166,7 @@ def test_server_with_domain_and_ssl():
         "",
         True,
         True,
+        *FIRST_DB,
     )
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain == "erp.example.com" and spec.ssl and spec.email == "me@example.com"
@@ -172,7 +179,7 @@ SERVER_START = ("production", "19.0", "community", "prod", "8069", False, "erp.e
 
 
 def test_server_dns_not_ready_keep_domain_without_ssl():
-    p = Scripted(*SERVER_START, "keep", False, "3", False, False, "keep")
+    p = Scripted(*SERVER_START, "keep", False, "3", False, False, *FIRST_DB, "keep")
     spec = run_wizard(p, make_ctx(is_root=True, public_ip=lambda: "9.9.9.9"))
     assert spec.domain == "erp.example.com"
     assert not spec.ssl and spec.workers == 3 and not spec.firewall
@@ -182,7 +189,7 @@ def test_server_dns_not_ready_keep_domain_without_ssl():
 
 def test_server_dns_check_again_until_it_points_here():
     answers = deque([set(), {"9.9.9.9"}])  # no record, then the record the user just added
-    p = Scripted(*SERVER_START, "check", True, "", "", True, True)
+    p = Scripted(*SERVER_START, "check", True, "", "", True, True, *FIRST_DB)
     ctx = make_ctx(is_root=True, public_ip=lambda: "9.9.9.9", resolve_domain=lambda d: answers.popleft())
     spec = run_wizard(p, ctx)
     assert spec.domain == "erp.example.com" and spec.ssl
@@ -191,7 +198,7 @@ def test_server_dns_check_again_until_it_points_here():
 
 
 def test_server_dns_not_ready_continue_without_domain():
-    p = Scripted(*SERVER_START, "none", "", True, True)
+    p = Scripted(*SERVER_START, "none", "", True, True, *FIRST_DB)
     spec = run_wizard(p, make_ctx(is_root=True, resolve_domain=lambda d: set()))
     assert spec.domain is None and not spec.ssl
     assert not any("SSL certificate (HTTPS" in q for q in p.asked)
@@ -210,7 +217,9 @@ def test_dns_preset_domain_only_warns():
 
 
 def test_server_without_domain():
-    p = Scripted("production", "18.0", "community", "prod", "8069", False, "", "", True, False, "keep")
+    p = Scripted(
+        "production", "18.0", "community", "prod", "8069", False, "", "", True, False, *FIRST_DB, "keep"
+    )
     spec = run_wizard(p, make_ctx(is_root=True))
     assert spec.domain is None and not spec.ssl
     assert any("http://1.2.3.4:8069" in s for s in p.said)  # the server's own IP
@@ -298,7 +307,7 @@ def test_switching_to_server_asks_the_server_questions():
     from odoobuddy.wizard import answers_without
 
     first = run_wizard(Scripted("development", "19.0", "community", "shop", "pycharm"), make_ctx())
-    p = Scripted("production", "erp.example.com", True, "", "", False, True, "keep")
+    p = Scripted("production", "erp.example.com", True, "", "", False, True, *FIRST_DB, "keep")
     edited = run_wizard(p, make_ctx(is_root=True, preset=answers_without(first, "purpose")))
     assert edited.mode == "server" and edited.domain == "erp.example.com" and edited.ssl
     assert edited.ide == "none" and edited.name == "shop"
@@ -328,6 +337,7 @@ def test_server_email_left_empty_is_not_asked_again():
         "",
         True,
         True,
+        *FIRST_DB,
     )
     first = run_wizard(p, make_ctx(is_root=True))
     assert first.email is None
@@ -462,7 +472,7 @@ def test_test_instance_follows_production_and_stays_small(make_instance):
 
 def test_production_check_applies_the_recommendations():
     # no SSL, no backups, no firewall, 5 workers with 1 GB free
-    p = Scripted(*SERVER_START, "keep", False, "", False, False, "apply")
+    p = Scripted(*SERVER_START, "keep", False, "", False, False, *FIRST_DB, "apply")
     spec = run_wizard(p, make_ctx(is_root=True, available_mb=1024, public_ip=lambda: "9.9.9.9"))
     assert spec.ssl and spec.daily_backups and spec.firewall and spec.workers == 2
     assert any("Production check" in m for m in p.said)
@@ -470,13 +480,14 @@ def test_production_check_applies_the_recommendations():
 
 def test_production_check_only_reports_when_not_interactive():
     p = Scripted(*SERVER_START, "keep", False, "", False, False)  # no final choice is asked
-    spec = run_wizard(p, make_ctx(is_root=True, interactive=False, public_ip=lambda: "9.9.9.9"))
+    ctx = make_ctx(is_root=True, interactive=False, public_ip=lambda: "9.9.9.9", preset={"country": "IN"})
+    spec = run_wizard(p, ctx)
     assert not spec.firewall and not spec.daily_backups
     assert any("Firewall off" in m for m in p.said)
 
 
 def test_production_check_passes_quietly():
-    p = Scripted(*SERVER_START, True, "", "", True, True)
+    p = Scripted(*SERVER_START, True, "", "", True, True, *FIRST_DB)
     run_wizard(p, make_ctx(is_root=True))
     assert any("✓ Production check" in m for m in p.said)
 
@@ -485,7 +496,7 @@ def test_old_mode_preset_still_works():
     ctx = make_ctx(
         is_root=True, preset={"mode": "server", "version": "19.0", "edition": "community", "name": "p"}
     )
-    p = Scripted("8069", False, "", "", True, True)
+    p = Scripted("8069", False, "", "", True, True, "erp", "IN", "", "keep")
     assert run_wizard(p, ctx).role == "production"
 
 
@@ -505,3 +516,68 @@ def test_development_offered_on_a_desktop_and_by_option_on_a_server():
     preset = {"purpose": "development"}
     p = Scripted("18.0", "community", "", "vscode")
     assert run_wizard(p, make_ctx(detected_mode="server", preset=preset)).role == "development"
+
+
+def _production(*answers, **ctx):
+    return Scripted(*SERVER_START, True, "", "", True, True, *answers), make_ctx(is_root=True, **ctx)
+
+
+def test_production_asks_for_database_country_and_api_addresses():
+    p, ctx = _production("erp", "india", "203.0.113.10, 198.51.100.7/24")
+    spec = run_wizard(p, ctx)
+    assert (spec.db_name, spec.country) == ("erp", "IN")
+    assert spec.rpc_allow == ["203.0.113.10/32", "198.51.100.0/24"]
+
+
+def test_database_name_defaults_to_the_instance_name_and_country_is_required():
+    p, ctx = _production(*FIRST_DB)
+    assert run_wizard(p, ctx).db_name == "prod"
+    with pytest.raises(AssertionError, match="2-letter"):
+        run_wizard(*_production("", "Atlantis", ""))
+
+
+def test_test_and_development_are_not_asked_about_protections():
+    p = Scripted("test", "19.0", "community", "erp-test", "", "")
+    spec = run_wizard(p, make_ctx(is_root=True))
+    assert spec.db_name is None and spec.country is None
+    asked = " ".join(p.asked)
+    assert "Country" not in asked and "first database" not in asked and "API" not in asked
+    p = Scripted("development", "18.0", "community", "", "vscode")
+    assert run_wizard(p, make_ctx()).country is None
+
+
+def test_script_install_needs_a_country():
+    ctx = make_ctx(is_root=True, interactive=False)
+    with pytest.raises(WizardAbort, match="--country"):
+        run_wizard(Scripted(*SERVER_START, True, "", "", True, True), ctx)
+
+
+def test_presets_are_checked():
+    for preset, message in (
+        ({"country": "Atlantis"}, "unknown country"),
+        ({"country": "IN", "db_name": "bad name"}, "invalid database name"),
+        ({"country": "IN", "rpc_allow": ["not-an-ip"]}, "--rpc-allow"),
+    ):
+        with pytest.raises(WizardAbort, match=message):
+            run_wizard(*_production("", "", "", preset=preset))
+
+
+def test_production_check_catches_an_api_open_to_everyone():
+    p, ctx = _production("", "IN", "0.0.0.0/0, 203.0.113.10", "apply")
+    spec = run_wizard(p, ctx)
+    assert any("open to every address" in m for m in p.said)
+    assert spec.rpc_allow == ["203.0.113.10/32"]
+
+
+def test_protection_answers_survive_changing_another_setting():
+    from odoobuddy.wizard import answers_without, editable_fields
+
+    first = run_wizard(*_production("erp", "IN", "203.0.113.10"))
+    assert {"db_name", "country", "rpc_allow"} <= {key for key, _ in editable_fields(first)}
+    q = Scripted("4")
+    edited = run_wizard(q, make_ctx(is_root=True, preset=answers_without(first, "workers")))
+    assert (edited.db_name, edited.country, edited.rpc_allow) == ("erp", "IN", ["203.0.113.10/32"])
+    assert len(q.asked) == 1
+    q = Scripted("DE")
+    edited = run_wizard(q, make_ctx(is_root=True, preset=answers_without(first, "country")))
+    assert edited.country == "DE" and edited.db_name == "erp"

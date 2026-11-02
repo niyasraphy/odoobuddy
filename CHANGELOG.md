@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+### Security
+New production installs are protected against bots that guess the admin password over XML-RPC,
+then use a superuser database role to run shell commands. Test and development instances, and
+instances that are already installed, do not change.
+
+- XML-RPC and JSON-RPC are blocked in Nginx, except for addresses given with `--rpc-allow`.
+- The database manager is closed (`list_db = False`, and `/web/database` is blocked in Nginx).
+- odoobuddy creates the first database: it asks for its name and country (`--db-name`,
+  `--country`), loads no demo data, and shows a generated admin password once.
+- `dbfilter` limits Odoo to the instance's databases.
+- A database role that already exists loses superuser.
+
+### Added
+- `odoobuddy db create NAME --instance INSTANCE --country CODE` creates a database without the
+  database manager. `restore` adds a new database to a protected instance's `dbfilter`.
+- `odoobuddy api status|allow|deny` shows and changes who may use a protected instance's API.
+
 ## [0.2.1] - 2026-10-17
 
 ### Added

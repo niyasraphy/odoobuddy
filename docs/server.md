@@ -31,9 +31,50 @@ already installed.
 | Backup before `update` | yes | no |
 | `remove`, `restore`, `update` | type the instance name to confirm | yes/no |
 | Label in every command | red **PRODUCTION** | orange **TEST** |
+| First database | created by odoobuddy, with the country you choose | you create it in the database manager |
+| Database manager | closed | open |
+| XML-RPC and JSON-RPC API | closed, except addresses you allow | open |
 
 Settings a test instance does not ask about can still be changed from the summary
 ("Change a setting").
+
+### Production protections
+
+Bots scan the internet for Odoo servers and guess the admin password over the XML-RPC API, where
+Odoo's login cooldown does not apply. A new production install closes that route:
+
+- **API:** Nginx answers 403 on `/xmlrpc` and `/jsonrpc`, except for addresses you allow when
+  asked, or with `--rpc-allow 203.0.113.10` (repeatable). The browser does not use these routes,
+  and neither does Odoo's newer `/json/2` API, which needs an API key.
+- **Database manager:** closed, with `list_db = False` and a 403 on `/web/database`.
+- **First database:** odoobuddy asks for its name and country (`--db-name`, `--country`), loads
+  no demo data, and shows a generated admin password once. **Save it when it is shown.** The
+  country sets the company's country and currency, and Odoo uses it to pick the localization
+  (taxes, chart of accounts) when Accounting is installed, so choose it carefully.
+- **Database role:** never a superuser, so getting into Odoo does not give a shell on the server.
+
+To add a database later:
+
+```bash
+sudo odoobuddy db create sales --instance shop --country IN
+```
+
+Odoo only serves the databases listed in `dbfilter`; `db create` and `restore` keep that list up
+to date. With several databases there is no selection screen, so open one by its address:
+`https://erp.example.com/web?db=sales`.
+
+To change who may use the API later:
+
+```bash
+odoobuddy api status shop                   # who is allowed now
+sudo odoobuddy api allow shop 203.0.113.10  # let an integration in (several addresses are fine)
+sudo odoobuddy api deny shop 203.0.113.10   # remove it again
+```
+
+These change only the API block of the Nginx site, test the result with `nginx -t`, and reload
+Nginx; if the test fails, the old site is put back. Odoo does not need a restart, and they also
+see addresses you added to the site by hand. `allow` refuses `0.0.0.0/0` and `::/0` unless you add
+`--open-to-everyone`.
 
 ### The production check
 

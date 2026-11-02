@@ -406,3 +406,11 @@ def test_odoo_letters_wave():
     firsts = [f.split("\n")[0].strip() for f in frames]
     assert firsts[0] == "o" and "o d o o" in firsts  # one letter jumps first, later all together
     assert ui.buddy_frame(ui._CYCLE).plain == frames[0]  # and starts over
+
+
+def test_countries_are_found_by_code_or_name():
+    from odoobuddy.countries import resolve_country
+
+    assert resolve_country("in") == "IN" and resolve_country(" India ") == "IN"
+    assert resolve_country("united arab emirates") == "AE"
+    assert resolve_country("Atlantis") is None and resolve_country("") is None

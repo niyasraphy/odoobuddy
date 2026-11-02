@@ -89,6 +89,7 @@ and admin password yourself.
   - worker counts tuned to your CPU and RAM
   - log rotation
   - **nightly backups** of every database, the last 7 kept
+  - **production only:** the database manager and XML-RPC / JSON-RPC API are closed to the internet, and odoobuddy creates the first database (you choose its country) with a generated admin password
 - **Production → local in one command:** `odoobuddy pull root@server:shop --into shop-dev` copies the database and files over SSH and neutralizes the copy (no emails, crons or payments).
 - **Tab completion** for commands, options and instance names (`odoobuddy st` + Tab → `odoobuddy start`), offered after your first install (or `odoobuddy --install-completion`).
 - **Always clear which Odoo you are touching.** Every command shows a banner labelled **PRODUCTION** (red), **TEST** (orange) or **DEV** (green), and destructive commands on production make you type the instance name.

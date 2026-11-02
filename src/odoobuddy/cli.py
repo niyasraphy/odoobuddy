@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
+from ipaddress import ip_network
 from pathlib import Path
 from typing import Optional
 
@@ -18,20 +19,34 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.text import Text
 
-from . import AUTHOR, DOCS_URL, REPO_URL, SUPPORT_EMAIL, __version__, editors, operations, repos, sources, ui
+from . import (
+    AUTHOR,
+    DOCS_URL,
+    REPO_URL,
+    SUPPORT_EMAIL,
+    __version__,
+    databases,
+    editors,
+    operations,
+    repos,
+    sources,
+    ui,
+)
 from . import pull as pull_mod
+from .countries import resolve_country
 from .ide import detect_ides, editor_install, find_ide, install_hint
 from .installer import (
     CHECK_MODULE,
     MIN_FREE_DISK_GB,
     Installer,
+    generate_password,
     processes_in_use,
     resource_warnings,
     suggested_workers,
     worker_limit,
 )
 from .layout import Layout
-from .models import IDE_NAMES, InstallSpec, Instance, RepoSpec, backup_unit_for
+from .models import IDE_NAMES, InstallSpec, Instance, RepoSpec, backup_unit_for, validate_db_name
 from .registry import Registry, RegistryError, resolve
 from .system import (
     CommandError,
@@ -57,7 +72,9 @@ from .wizard import (
     WizardAbort,
     WizardContext,
     answers_without,
+    country_problem,
     editable_fields,
+    parse_rpc_allow,
     run_wizard,
 )
 
@@ -130,7 +147,12 @@ def _database(instance: Instance, db: Optional[str]) -> str:
             raise _fail(f"instance {instance.name} has no database {db!r} (databases: {known})")
         return db
     if not databases:
-        raise _fail(f"{instance.name} has no database yet. Create one at {instance.url}/web/database/manager")
+        where = (
+            f"with: odoobuddy db create NAME --instance {instance.name}"
+            if instance.hardened
+            else f"at {instance.url}/web/database/manager"
+        )
+        raise _fail(f"{instance.name} has no database yet. Create one {where}")
     if len(databases) == 1:
         return databases[0]
     if not sys.stdin.isatty():
@@ -306,6 +328,15 @@ def install(
     daily_backups: Optional[bool] = typer.Option(
         None, "--daily-backups/--no-daily-backups", help="Server only: back up every database each night"
     ),
+    db_name: Optional[str] = typer.Option(
+        None, "--db-name", help="Production only: name of the first database (default: the instance name)"
+    ),
+    country: Optional[str] = typer.Option(
+        None, "--country", help="Production only: country of the first database, e.g. IN or India"
+    ),
+    rpc_allow: Optional[list[str]] = typer.Option(
+        None, "--rpc-allow", help="Production only: address allowed to use the RPC API (repeatable)"
+    ),
     github_token: Optional[str] = typer.Option(
         None,
         envvar="ODOO_GITHUB_TOKEN",
@@ -335,6 +366,9 @@ def install(
         "workers": workers,
         "firewall": firewall,
         "daily_backups": daily_backups,
+        "db_name": db_name,
+        "country": country,
+        "rpc_allow": rpc_allow or None,
         "github_token": github_token,
     }.items():
         if value is not None:
@@ -530,12 +564,16 @@ def install(
     creds = installer.credentials
     manager = ui.link(f"{inst.url}/web/database/manager")
     first_db = (
-        ui.heading("Create your first database") + "\n"
-        f"  1. {'Once Odoo is running, open' if inst.run_mode != 'background' else 'Open'} {manager}\n"
-        f"  2. Master password: {ui.secret(creds.master_password)}\n"
-        "  3. Choose the database name, language, country, demo data and admin password\n"
-        "  [dim](the master password is also saved as admin_passwd in[/] "
-        f"{ui.path(inst.config_path)}[dim])[/]"
+        _first_database_message(inst, installer.first_database, creds.admin_password)
+        if inst.hardened
+        else (
+            ui.heading("Create your first database") + "\n"
+            f"  1. {'Once Odoo is running, open' if inst.run_mode != 'background' else 'Open'} {manager}\n"
+            f"  2. Master password: {ui.secret(creds.master_password)}\n"
+            "  3. Choose the database name, language, country, demo data and admin password\n"
+            "  [dim](the master password is also saved as admin_passwd in[/] "
+            f"{ui.path(inst.config_path)}[dim])[/]"
+        )
     )
     body = Group(
         f"[bold green]✓ Odoo {inst.version} is installed and working[/] "
@@ -556,6 +594,21 @@ def install(
     console.print(f"\n[dim]odoobuddy by {AUTHOR} · if it helped, a ⭐ on GitHub is welcome: {REPO_URL}[/]")
     if not yes and sys.stdin.isatty():
         _offer_completion(prompter)
+
+
+def _first_database_message(inst: Instance, name: str, password: str | None) -> str:
+    """How to log in to a database odoobuddy created. The password is shown here and never again."""
+    if password is None:
+        kept = f"{escape(name)} already existed; its admin password is unchanged"
+        return f"{ui.heading('Your database')}\n  {kept}"
+    return (
+        f"{ui.heading('Your database is ready')}\n"
+        f"  Open {ui.link(inst.url)}\n"
+        f"  Database: [bold]{escape(name)}[/]\n"
+        "  Login: [bold]admin[/]\n"
+        f"  Password: {ui.secret(password)}\n"
+        "  [yellow]Save this password now: it is shown only once.[/]"
+    )
 
 
 def _offer_completion(prompter: QuestionaryPrompter) -> None:
@@ -691,6 +744,189 @@ def _with_status(message: str, fn):  # type: ignore[no-untyped-def]
 
 
 # --------------------------------------------------------- instance commands
+
+
+db_app = typer.Typer(help="Create databases without Odoo's database manager.", no_args_is_help=True)
+app.add_typer(db_app, name="db")
+
+
+@db_app.command("create")
+def db_create(
+    db_name: str = typer.Argument(..., help="Name of the new database"),
+    name: Optional[str] = typer.Option(
+        None, "--instance", help="Instance to add it to", autocompletion=_complete_names
+    ),
+    country: Optional[str] = typer.Option(None, "--country", help="Company country, e.g. IN or India"),
+) -> None:
+    """Create a database, with no demo data and a generated admin password."""
+    inst = _instance(name)
+    _require_root_for(inst, "Creating a database on")
+    try:
+        validate_db_name(db_name)
+    except ValueError as exc:
+        raise _fail(f"invalid database name: {exc}") from None
+    if country is None:
+        if not sys.stdin.isatty():
+            raise _fail("give the country with --country, e.g. --country IN")
+        try:
+            country = QuestionaryPrompter(console.print).text(
+                "Country (2-letter code or full name):", validate=country_problem
+            )
+        except WizardAbort:
+            console.print("Cancelled, nothing was changed.")
+            raise typer.Exit(1) from None
+    code = resolve_country(country)
+    if code is None:
+        raise _fail(f"unknown country {country!r}: use its 2-letter code or full name, e.g. IN or India")
+    runner = _runner(False, f"db-{inst.name}")
+    found = databases.state(runner, inst, db_name)
+    if found != "missing":
+        raise _fail(f"database {db_name} already exists")
+    password = generate_password()
+    try:
+        _progress(
+            f"Creating database {db_name}",
+            lambda: databases.create(runner, inst, db_name, code, password),
+            runner,
+        )
+        operations.allow_database(runner, inst, db_name)
+        if inst.hardened and operations.status(inst) == operations.STATUS_RUNNING:
+            operations.restart(runner, inst)
+    except CommandError as exc:
+        raise _fail(f"could not create database {db_name}: {exc.output or exc}") from None
+    console.print(_first_database_message(inst, db_name, password))
+    address = ui.link(f"{inst.url}/web?db={db_name}")
+    console.print(f"  [dim]With several databases, open one by its address:[/] {address}")
+
+
+api_app = typer.Typer(
+    help="Choose who may use a protected instance's XML-RPC and JSON-RPC API.", no_args_is_help=True
+)
+app.add_typer(api_app, name="api")
+
+
+def _api_addresses(inst: Instance) -> list[str]:
+    """The allowed addresses in their normal form. Anything else in the file is shown as it is."""
+    try:
+        found = operations.api_allowed(_layout(), inst)
+    except ValueError as exc:
+        raise _fail(str(exc)) from None
+    addresses = []
+    for address in found:
+        try:
+            addresses += parse_rpc_allow(address)
+        except ValueError:
+            addresses.append(address)
+    return addresses
+
+
+def _open_to_everyone(address: str) -> bool:
+    try:
+        return address == "all" or ip_network(address).prefixlen == 0
+    except ValueError:
+        return False
+
+
+def _show_api(addresses: list[str]) -> None:
+    if not addresses:
+        console.print("API (XML-RPC, JSON-RPC): [bold]closed[/] to every address")
+        return
+    console.print("API (XML-RPC, JSON-RPC): open only to:")
+    for address in addresses:
+        console.print(f"  {escape(address)}")
+    if any(_open_to_everyone(address) for address in addresses):
+        console.print("[yellow]⚠ Open to every address: bots can keep guessing the admin password.[/]")
+
+
+def _protected_instance(name: str) -> Instance:
+    inst = _instance(name)
+    if not inst.hardened:
+        raise _fail(
+            f"{inst.name} was not installed with the production protections, so nothing blocks its API"
+        )
+    return inst
+
+
+def _change_api(inst: Instance, addresses: list[str], *, dry_run: bool) -> None:
+    runner = _runner(dry_run, f"api-{inst.name}")
+    try:
+        operations.set_api_allowed(runner, _registry(), _layout(), inst, addresses)
+    except CommandError as exc:
+        raise _fail(f"Nginx rejected the change, so nothing changed: {exc.output or exc}") from None
+    if dry_run:
+        console.print("[yellow]Dry run: nothing was changed.[/yellow]")
+        return
+    console.print("[green]✓ Nginx reloaded[/]")
+    _show_api(addresses)
+
+
+@api_app.command("status")
+def api_status(
+    name: str = typer.Argument(..., help="Instance name", autocompletion=_complete_names),
+) -> None:
+    """Show who may use the API."""
+    inst = _instance(name)
+    ui.banner(inst)
+    if not inst.hardened:
+        console.print("API (XML-RPC, JSON-RPC): [bold]not blocked[/] by odoobuddy on this instance")
+        return
+    _show_api(_api_addresses(inst))
+
+
+@api_app.command("allow")
+def api_allow(
+    name: str = typer.Argument(..., help="Instance name", autocompletion=_complete_names),
+    addresses: list[str] = typer.Argument(..., help="IP addresses or networks, e.g. 203.0.113.10"),
+    open_to_everyone: bool = typer.Option(
+        False, "--open-to-everyone", help="Accept 0.0.0.0/0 or ::/0, which lets bots guess passwords"
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen, change nothing"),
+) -> None:
+    """Let addresses use the API."""
+    inst = _protected_instance(name)
+    if not dry_run:
+        _require_root_for(inst, "Changing the API access of")
+    try:
+        wanted = parse_rpc_allow(" ".join(addresses))
+    except ValueError:
+        raise _fail("give IP addresses or networks, e.g. 203.0.113.10 or 198.51.100.0/24") from None
+    if not open_to_everyone and any(_open_to_everyone(address) for address in wanted):
+        raise _fail(
+            "that opens the API to every address, so bots can keep guessing the admin password. "
+            "List specific addresses, or add --open-to-everyone if you really mean it"
+        )
+    ui.banner(inst, "Allow API access")
+    current = _api_addresses(inst)
+    new = [address for address in dict.fromkeys(wanted) if address not in current]
+    if not new:
+        console.print("Already allowed, nothing to change.")
+        _show_api(current)
+        return
+    _change_api(inst, [*current, *new], dry_run=dry_run)
+
+
+@api_app.command("deny")
+def api_deny(
+    name: str = typer.Argument(..., help="Instance name", autocompletion=_complete_names),
+    addresses: list[str] = typer.Argument(..., help="IP addresses or networks to remove"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Show what would happen, change nothing"),
+) -> None:
+    """Stop addresses from using the API."""
+    inst = _protected_instance(name)
+    if not dry_run:
+        _require_root_for(inst, "Changing the API access of")
+    try:
+        unwanted = set(parse_rpc_allow(" ".join(addresses)))
+    except ValueError:
+        unwanted = set(addresses)  # e.g. "all", added by hand
+    ui.banner(inst, "Remove API access")
+    current = _api_addresses(inst)
+    kept = [address for address in current if address not in unwanted]
+    if len(kept) == len(current):
+        console.print("Not on the list, nothing to change.")
+        _show_api(current)
+        return
+    _change_api(inst, kept, dry_run=dry_run)
 
 
 @app.command("list")
@@ -1334,7 +1570,7 @@ _NAME_FIRST = {
     "remove",
     "repos",
 }
-_NAME_OPTION = {"clone": "--instance", "restore": "--name", "pull": "--into"}
+_NAME_OPTION = {"clone": "--instance", "restore": "--name", "pull": "--into", "db": "--instance"}
 
 
 def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
@@ -1344,6 +1580,8 @@ def rewrite_args(args: list[str], instance_names: set[str]) -> list[str]:
     """
     if args and args[0] == "help" and "help" not in instance_names:
         return [*args[1:2], "--help"]
+    if len(args) >= 3 and args[0] in instance_names and args[1] == "api":
+        return ["api", args[2], args[0], *args[3:]]  # odoobuddy shop api allow 1.2.3.4
     if len(args) >= 2 and args[0] in instance_names:
         name, command, rest = args[0], args[1], args[2:]
         if command in _NAME_FIRST:

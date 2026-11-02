@@ -12,8 +12,10 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from ipaddress import ip_network
 from typing import Any, Protocol, cast
 
+from .countries import COUNTRIES, resolve_country
 from .ide import EditorInstall, install_hint
 from .models import (
     BACKEND_OFFSET,
@@ -30,6 +32,7 @@ from .models import (
     RunMode,
     default_purpose,
     mode_for,
+    validate_db_name,
     validate_name,
 )
 from .ports import check_port, gevent_port_for, suggest_ports
@@ -367,6 +370,9 @@ def planned_steps(ctx: WizardContext, purpose: Purpose) -> list[str]:
             workers=not pre.get("workers"),
             firewall="firewall" not in pre and _asks(ctx, purpose, "firewall"),
             daily_backups="daily_backups" not in pre and _asks(ctx, purpose, "daily_backups"),
+            db_name="db_name" not in pre and purpose == "production" and ctx.interactive,
+            country="country" not in pre and purpose == "production",
+            rpc_allow="rpc_allow" not in pre and purpose == "production" and ctx.interactive,
         )
     return [key for key, ask in asked.items() if ask]
 
@@ -517,6 +523,7 @@ def _run_wizard(p: Prompter, ctx: WizardContext) -> InstallSpec:
 
     _server_questions(p, ctx, spec, step)
     if purpose == "production":
+        _protection_questions(p, ctx, spec, step)
         _production_check(p, ctx, spec)
     return spec
 
@@ -670,6 +677,84 @@ def _server_questions(
         )
 
 
+def _db_name_problem(value: str) -> str:
+    try:
+        validate_db_name(value)
+    except ValueError as exc:
+        return f"✗ {exc}"
+    return ""
+
+
+def country_problem(value: str) -> str:
+    if resolve_country(value):
+        return ""
+    return "✗ Type the country's 2-letter code or full name, e.g. IN or India"
+
+
+def parse_rpc_allow(value: str) -> list[str]:
+    """Addresses typed with commas or spaces, normalized. ValueError for anything else."""
+    return [str(ip_network(part, strict=False)) for part in re.split(r"[,\s]+", value.strip()) if part]
+
+
+def _rpc_allow_problem(value: str) -> str:
+    try:
+        parse_rpc_allow(value)
+    except ValueError:
+        return "✗ Type IP addresses or networks, e.g. 203.0.113.10, 198.51.100.0/24"
+    return ""
+
+
+def _protection_questions(
+    p: Prompter, ctx: WizardContext, spec: InstallSpec, step: Callable[[str], None]
+) -> None:
+    """Production: the database manager stays closed, so the first database is set up here."""
+    pre = ctx.preset
+    if "db_name" in pre or not ctx.interactive:
+        spec.db_name = pre.get("db_name", spec.name)
+        error = _db_name_problem(spec.db_name or "")
+        if error:
+            raise WizardAbort(f"invalid database name {spec.db_name!r}: {error}")
+    else:
+        step("db_name")
+        p.say(
+            "[dim]Production keeps Odoo's database manager closed, so odoobuddy creates the first "
+            "database, without demo data and with a generated admin password.[/dim]"
+        )
+        spec.db_name = p.text("Name of the first database:", default=spec.name, validate=_db_name_problem)
+    if "country" in pre:
+        code = resolve_country(pre["country"] or "")
+        if not code:
+            raise WizardAbort(f"unknown country {pre['country']!r}: {country_problem('')}")
+    elif ctx.interactive:
+        step("country")
+        p.say(
+            "[dim]The new database's company gets this country and its currency. Odoo also uses it to "
+            "pick the localization (taxes, chart of accounts) when Accounting is installed.[/dim]"
+        )
+        code = resolve_country(p.text("Country (2-letter code or full name):", validate=country_problem))
+    else:
+        raise WizardAbort("give the country of the first database with --country, e.g. --country IN")
+    assert code is not None
+    spec.country = code
+    p.say(f"[dim]Country: {COUNTRIES[code]}[/dim]")
+    if "rpc_allow" in pre:
+        try:
+            spec.rpc_allow = parse_rpc_allow(" ".join(pre["rpc_allow"]))
+        except ValueError:
+            raise WizardAbort(f"invalid --rpc-allow: {_rpc_allow_problem('x y')}") from None
+    elif ctx.interactive:
+        step("rpc_allow")
+        p.say(
+            "[dim]Bots guess admin passwords over Odoo's XML-RPC and JSON-RPC API, so it is closed to "
+            "the internet. If an integration connects from outside, list its address.[/dim]\n"
+            "[dim]No integrations? Just press [/dim][bold]Enter[/bold][dim]. "
+            "Using Odoo in a browser does not need this.[/dim]"
+        )
+        spec.rpc_allow = parse_rpc_allow(
+            p.text("Addresses allowed to use the API (or press Enter for none):", validate=_rpc_allow_problem)
+        )
+
+
 def _production_check(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> None:
     """Point out risky production choices, and offer to apply the recommended ones."""
     issues: list[tuple[str, str, Callable[[], None] | None]] = []  # (problem, advice, fix)
@@ -703,6 +788,15 @@ def _production_check(p: Prompter, ctx: WizardContext, spec: InstallSpec) -> Non
                 "Firewall off: every open port on this server is reachable from the internet",
                 "turn on the firewall (SSH and web stay open)",
                 lambda: setattr(spec, "firewall", True),
+            )
+        )
+    specific = [net for net in spec.rpc_allow if ip_network(net).prefixlen]
+    if len(specific) != len(spec.rpc_allow):
+        issues.append(
+            (
+                "The API is open to every address: bots can keep guessing the admin password",
+                "allow only the addresses you listed specifically",
+                lambda: setattr(spec, "rpc_allow", specific),
             )
         )
     if ctx.available_mb:
@@ -849,8 +943,9 @@ def _repo_questions(p: Prompter, ctx: WizardContext, version: str) -> list[RepoS
 # purpose normally uses the default (e.g. the port of a development instance).
 EDITING = "_editing"
 
+_PROTECTION_KEYS = ["db_name", "country", "rpc_allow"]  # production only
 # Settings that can be changed from the summary, and the answers each one invalidates.
-_SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall", "daily_backups")
+_SERVER_KEYS = ("domain", "ssl", "email", "workers", "firewall", "daily_backups", *_PROTECTION_KEYS)
 EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
     "purpose": ("Purpose", ("purpose", "mode", "ide", "run_mode", "install_editor", *_SERVER_KEYS)),
     "version": ("Odoo version", ("version",)),
@@ -864,6 +959,9 @@ EDITABLE: dict[str, tuple[str, tuple[str, ...]]] = {
     "workers": ("Number of workers", ("workers",)),
     "firewall": ("Firewall", ("firewall",)),
     "daily_backups": ("Nightly backups", ("daily_backups",)),
+    "db_name": ("First database", ("db_name",)),
+    "country": ("Country", ("country",)),
+    "rpc_allow": ("Addresses allowed to use the API", ("rpc_allow",)),
 }
 
 
@@ -882,6 +980,9 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
         "workers": str(spec.workers),
         "firewall": "yes" if spec.firewall else "no",
         "daily_backups": "yes" if spec.daily_backups else "no",
+        "db_name": spec.db_name or spec.name,
+        "country": spec.country or "not set",
+        "rpc_allow": ", ".join(spec.rpc_allow) or "none",
     }
     keys = ["purpose", "version", "edition", "name", "http_port", "repos"]
     keys += (
@@ -889,6 +990,8 @@ def editable_fields(spec: InstallSpec) -> list[tuple[str, str]]:
         if spec.mode == "local"
         else ["domain", *(["ssl"] if spec.domain else []), "workers", "firewall", "daily_backups"]
     )
+    if spec.role == "production":
+        keys += _PROTECTION_KEYS
     return [(k, f"{EDITABLE[k][0]}: {current[k]}") for k in keys]
 
 
@@ -915,6 +1018,8 @@ def answers_without(spec: InstallSpec, key: str) -> dict[str, Any]:
         )
         if spec.domain:
             preset.update(ssl=spec.ssl, email=spec.email)
+        if spec.role == "production":
+            preset.update(db_name=spec.db_name, country=spec.country, rpc_allow=list(spec.rpc_allow))
     for dropped in EDITABLE[key][1]:
         preset.pop(dropped, None)
     preset[EDITING] = key

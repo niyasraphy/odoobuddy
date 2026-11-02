@@ -324,3 +324,66 @@ def test_review_offers_install_and_dry_run_separately(isolated, monkeypatch):
     result = runner.invoke(app, server)
     assert "needs sudo" in result.output and "sudo -E odoobuddy install" in result.output, result.output
     assert result.exit_code == 1 and "Cancelled, nothing was changed" in result.output
+
+
+@pytest.fixture
+def protected(isolated, make_instance, monkeypatch, tmp_path):
+    from odoobuddy import render
+    from tests.conftest import RecordingRunner
+
+    inst = make_instance("shop", mode="server", purpose="production", hardened=True)
+    isolated.add(inst)
+    site = Layout.under(tmp_path).nginx_dir / "sites-available" / "odoo-shop.conf"
+    site.parent.mkdir(parents=True, exist_ok=True)
+    site.write_text(render.nginx_site(inst))
+    commands = RecordingRunner(root=True)
+    monkeypatch.setattr("odoobuddy.cli._runner", lambda dry_run, log_name: commands)
+    monkeypatch.setattr("odoobuddy.cli.is_root", lambda: True)
+    return SimpleNamespace(site=site, commands=commands, registry=isolated)
+
+
+def test_api_allow_status_deny(protected):
+    closed = runner.invoke(app, ["api", "status", "shop"])
+    assert closed.exit_code == 0 and "closed" in closed.output
+    added = runner.invoke(app, ["api", "allow", "shop", "203.0.113.10", "198.51.100.0/24"])
+    assert added.exit_code == 0, added.output
+    assert "allow 203.0.113.10/32;" in protected.site.read_text()
+    assert "allow 198.51.100.0/24;" in protected.site.read_text()
+    assert protected.commands.joined() == ["nginx -t", "systemctl reload nginx"]
+    assert protected.registry.get("shop").rpc_allow == ["203.0.113.10/32", "198.51.100.0/24"]
+    again = runner.invoke(app, ["api", "allow", "shop", "203.0.113.10"])
+    assert again.exit_code == 0 and "Already allowed" in again.output
+    assert len(protected.commands.commands) == 2
+    gone = runner.invoke(app, ["api", "deny", "shop", "203.0.113.10"])
+    assert gone.exit_code == 0 and "allow 203.0.113.10/32;" not in protected.site.read_text()
+    assert "allow 198.51.100.0/24;" in protected.site.read_text()
+    absent = runner.invoke(app, ["api", "deny", "shop", "203.0.113.10"])
+    assert absent.exit_code == 0 and "Not on the list" in absent.output
+
+
+def test_api_refuses_opening_to_everyone_unless_asked(protected):
+    refused = runner.invoke(app, ["api", "allow", "shop", "0.0.0.0/0"])
+    assert refused.exit_code != 0 and "0.0.0.0/0" not in protected.site.read_text()
+    assert not protected.commands.commands
+    forced = runner.invoke(app, ["api", "allow", "shop", "0.0.0.0/0", "--open-to-everyone"])
+    assert forced.exit_code == 0 and "allow 0.0.0.0/0;" in protected.site.read_text()
+    assert "Open to every address" in forced.output
+
+
+def test_api_rejects_bad_addresses_and_needs_root(protected, monkeypatch):
+    assert runner.invoke(app, ["api", "allow", "shop", "not-an-ip"]).exit_code != 0
+    monkeypatch.setattr("odoobuddy.cli.is_root", lambda: False)
+    needs_root = runner.invoke(app, ["api", "allow", "shop", "203.0.113.10"])
+    assert needs_root.exit_code != 0 and "root" in needs_root.output
+    assert "203.0.113.10" not in protected.site.read_text()
+
+
+def test_api_on_an_unprotected_instance(isolated, make_instance):
+    isolated.add(make_instance("erp-test", mode="server", purpose="test"))
+    assert "not blocked" in runner.invoke(app, ["api", "status", "erp-test"]).output
+    refused = runner.invoke(app, ["api", "allow", "erp-test", "203.0.113.10"])
+    assert refused.exit_code != 0 and "not installed with the production protections" in refused.output
+
+
+def test_api_with_the_instance_name_first():
+    assert rewrite_args(["shop", "api", "allow", "1.2.3.4"], {"shop"}) == ["api", "allow", "shop", "1.2.3.4"]

@@ -31,10 +31,15 @@ def psql_as_postgres(runner: Runner, sql: str, *, capture: bool = False) -> str:
     return result.stdout if capture else ""
 
 
-def ensure_role(runner: Runner, role: str, password: str) -> None:
-    """Create the role, or reset its password if it exists (so re-runs stay consistent)."""
+def ensure_role(runner: Runner, role: str, password: str, *, no_superuser: bool = False) -> None:
+    """Create the role, or reset its password if it exists (so re-runs stay consistent).
+
+    New roles are never superusers. ``no_superuser`` also takes it away from an existing role: a
+    superuser role lets anyone who gets admin in Odoo run shell commands (COPY ... FROM PROGRAM).
+    """
     role = _check_role(role)
     pw = _sql_literal(password)
+    existing = "LOGIN CREATEDB NOSUPERUSER" if no_superuser else "LOGIN CREATEDB"
     psql_as_postgres(
         runner,
         f"""DO $$
@@ -42,7 +47,7 @@ BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '{role}') THEN
     CREATE ROLE "{role}" LOGIN CREATEDB PASSWORD {pw};
   ELSE
-    ALTER ROLE "{role}" WITH LOGIN CREATEDB PASSWORD {pw};
+    ALTER ROLE "{role}" WITH {existing} PASSWORD {pw};
   END IF;
 END $$;
 """,

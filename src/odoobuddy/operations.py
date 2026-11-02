@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -145,6 +146,48 @@ def logs_command(instance: Instance, lines: int, follow: bool) -> list[str]:
     if instance.mode == "server" and not is_root():
         cmd = ["sudo", *cmd]
     return cmd
+
+
+def _site_path(layout: Layout, instance: Instance) -> Path:
+    return layout.nginx_dir / "sites-available" / f"odoo-{instance.name}.conf"
+
+
+def api_allowed(layout: Layout, instance: Instance) -> list[str]:
+    """The addresses Nginx lets use the XML-RPC / JSON-RPC API. The Nginx site is the truth, because
+    people can edit it by hand. ValueError when it cannot be read as odoobuddy wrote it."""
+    path = _site_path(layout, instance)
+    allowed = render.api_allowed(path.read_text(encoding="utf-8")) if path.is_file() else None
+    if allowed is None:
+        raise ValueError(f"cannot find the API block with 'deny all;' in {path}: was it edited by hand?")
+    return allowed
+
+
+def set_api_allowed(
+    runner: Runner, registry: Registry, layout: Layout, instance: Instance, addresses: list[str]
+) -> None:
+    """Change who may use the API. If Nginx rejects the result, the old site is put back."""
+    path = _site_path(layout, instance)
+    before = path.read_text(encoding="utf-8")
+    runner.write_file(path, render.with_api_allowed(before, addresses))
+    try:
+        runner.run(["nginx", "-t"])
+        runner.run(["systemctl", "reload", "nginx"])
+    except CommandError:
+        runner.write_file(path, before)
+        raise
+    if not runner.dry_run:
+        instance.rpc_allow = list(addresses)
+        registry.update(instance)
+
+
+def allow_database(runner: Runner, instance: Instance, db: str) -> None:
+    """Protected instances only serve the databases in their dbfilter: add ``db`` (needs a restart)."""
+    if not instance.hardened:
+        return
+    wanted = render.dbfilter({*list_databases(runner, instance), db})
+    text = instance.config_path.read_text(encoding="utf-8")
+    updated = re.sub(r"(?m)^dbfilter\s*=.*$", lambda _: f"dbfilter = {wanted}", text)
+    runner.write_file(instance.config_path, updated, mode=0o640, owner=instance.system_user)
 
 
 def list_databases(runner: Runner, instance: Instance) -> list[str]:
@@ -370,6 +413,7 @@ def restore(runner: Runner, instance: Instance, archive: Path, db: str) -> None:
             shutil.copytree(extracted, filestore)
     if instance.mode == "server":
         runner.run(["chown", "-R", f"{instance.system_user}:{instance.system_user}", str(instance.data_dir)])
+    allow_database(runner, instance, db)
     if was_running:
         start(runner, instance)
 

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import postgres, render, sources, system
+from . import databases, postgres, render, sources, system
 from .layout import Layout
 from .models import IDE_NAMES, InstallSpec, Instance, db_role_for
 from .postgres import client_env, read_db_settings
@@ -147,6 +147,7 @@ class Step:
 class Credentials:
     db_password: str
     master_password: str
+    admin_password: str | None = None  # set once the installer has created the first database
 
 
 class Installer:
@@ -178,6 +179,8 @@ class Installer:
             edition=spec.edition,
             mode=spec.mode,
             purpose=spec.role,
+            hardened=spec.mode == "server" and spec.role == "production",
+            rpc_allow=list(spec.rpc_allow),
             http_port=spec.http_port,
             gevent_port=spec.gevent_port,
             db_user=db_role_for(spec.name),
@@ -225,6 +228,8 @@ class Installer:
             Step("Write configuration", self.write_config),
             Step(f"Test installation ({CHECK_MODULE} in a temporary database)", self.test_installation),
         ]
+        if inst.hardened:
+            steps.append(Step(f"Create database {self.first_database}", self.create_first_database))
         if not server and inst.ide != "none":
             ide_name = IDE_NAMES[inst.ide]
             if self.spec.install_editor:
@@ -328,7 +333,12 @@ class Installer:
         editors.install_debug_hook(self.runner, inst)  # also needed on servers: see DEBUG_HOOK
 
     def create_db_role(self) -> None:
-        postgres.ensure_role(self.runner, self.instance.db_user, self.credentials.db_password)
+        postgres.ensure_role(
+            self.runner,
+            self.instance.db_user,
+            self.credentials.db_password,
+            no_superuser=self.instance.hardened,
+        )
 
     def create_system_user(self) -> None:
         inst = self.instance
@@ -367,6 +377,7 @@ class Installer:
                 db_password=self.credentials.db_password,
                 master_password=self.credentials.master_password,
                 workers=self.spec.workers,
+                databases=[self.first_database] if inst.hardened else [],
             ),
             mode=0o640 if server else 0o600,
             owner=owner,
@@ -374,6 +385,25 @@ class Installer:
         self.runner.write_file(inst.instance_dir / MARKER_FILE, inst.name + "\n")
         if not server:
             self.runner.write_file(inst.instance_dir / "start.sh", render.start_script(inst), mode=0o755)
+
+    @property
+    def first_database(self) -> str:
+        return self.spec.db_name or self.spec.name
+
+    def create_first_database(self) -> None:
+        """Production: the database manager stays closed, so the first database is made here."""
+        name, country = self.first_database, self.spec.country
+        if not country:
+            raise ValueError("a production install needs a country for its first database")
+        found = databases.state(self.runner, self.instance, name)
+        if found == "unfinished":
+            raise databases.unfinished_error(name)
+        if found == "ready":  # an earlier, interrupted run made it: its password was shown then
+            self.warnings.append(f"Database {name} already existed, so its admin password was not changed.")
+            return
+        password = generate_password()
+        databases.create(self.runner, self.instance, name, country, password)
+        self.credentials.admin_password = password
 
     def _odoo_cmd(self, *args: str, subcommand: str | None = None) -> list[str]:
         inst = self.instance
@@ -399,8 +429,8 @@ class Installer:
     def test_installation(self) -> None:
         """Prove the setup works by installing a real module, then throw the database away.
 
-        The user creates their own first database afterwards (name, language, country,
-        demo data and admin password are all chosen in Odoo's database manager).
+        Without the production protections, the user creates their first database afterwards
+        (name, language, country, demo data and admin password are chosen in the database manager).
         """
         inst = self.instance
         self.drop_check_db()  # leftover from an interrupted run

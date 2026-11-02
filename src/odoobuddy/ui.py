@@ -13,6 +13,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from .countries import COUNTRIES
 from .ide import find_ide, install_hint
 from .models import IDE_NAMES, PURPOSES, VSCODE_FAMILY, InstallSpec, Instance
 
@@ -247,6 +248,23 @@ def _summary_groups(spec: InstallSpec) -> list[list[tuple[str, str]]]:
                 ),
             ]
         )
+        if spec.role == "production":
+            country = COUNTRIES.get(spec.country or "", "not set")
+            groups.append(
+                [
+                    (
+                        "Database",
+                        f"{escape(spec.db_name or spec.name)} in {escape(country)}, generated password",
+                    ),
+                    ("Manager", "closed (/web/database is blocked)"),
+                    (
+                        "API",
+                        "closed, except " + ", ".join(spec.rpc_allow)
+                        if spec.rpc_allow
+                        else "closed (XML-RPC, JSON-RPC)",
+                    ),
+                ]
+            )
     if spec.repos:
         groups.append([("Custom repos", "\n".join(escape(f"{r.url} ({r.branch})") for r in spec.repos))])
     return groups
@@ -267,6 +285,10 @@ def install_command(spec: InstallSpec, *, as_root: bool = False) -> str:
         options.append(["--workers", str(spec.workers)])
         options.append(["--firewall" if spec.firewall else "--no-firewall"])
         options.append(["--daily-backups" if spec.daily_backups else "--no-daily-backups"])
+        if spec.role == "production":
+            options.append(["--db-name", spec.db_name or spec.name])
+            options.append(["--country", spec.country or ""])
+            options += [["--rpc-allow", address] for address in spec.rpc_allow]
     options += [["--repo", f"{repo.url}#{repo.branch}"] for repo in spec.repos] or [["--no-repos"]]
     options.append(["--yes"])
     prefix = "sudo -E odoobuddy" if spec.mode == "server" and not as_root else "odoobuddy"
@@ -334,7 +356,10 @@ def instance_details(instance: Instance) -> list[tuple[str, str]]:
         ("URL", link(instance.url)),
         (
             "Databases",
-            f"create them at {link(instance.url + '/web/database/manager')}  "
+            f"create them with {cmd(f'odoobuddy db create NAME --instance {instance.name}')}  "
+            f"[dim](PostgreSQL user:[/] [bold]{instance.db_user}[/][dim])[/]"
+            if instance.hardened
+            else f"create them at {link(instance.url + '/web/database/manager')}  "
             f"[dim](PostgreSQL user:[/] [bold]{instance.db_user}[/][dim])[/]",
         ),
         ("Runs as", runs_as),

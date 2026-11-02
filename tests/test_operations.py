@@ -3,8 +3,9 @@ import zipfile
 
 import pytest
 
-from odoobuddy import operations
+from odoobuddy import operations, render
 from odoobuddy.registry import MARKER_FILE
+from odoobuddy.system import CommandError
 
 from .conftest import RecordingRunner
 
@@ -215,3 +216,75 @@ def test_doctor_wants_nightly_backups_for_production(registry, layout, make_inst
     assert [(c.subject, c.ok) for c in backup_checks()] == [("prod", False)]  # test instances are not checked
     operations.schedule_backups(RecordingRunner(root=True), layout, prod)
     assert [(c.subject, c.ok) for c in backup_checks()] == [("prod", True)]
+
+
+def test_allow_database_updates_only_protected_instances(make_instance, tmp_path):
+    class Runner_(RecordingRunner):
+        def run(self, cmd, **kwargs):
+            result = super().run(cmd, **kwargs)
+            result.stdout = "erp\n"
+            return result
+
+    for hardened, expected in ((True, "dbfilter = ^(erp|new\\.db)$"), (False, "dbfilter = ^erp$")):
+        inst = make_instance("shop", mode="server", purpose="production", hardened=hardened)
+        inst.config_path.parent.mkdir(parents=True, exist_ok=True)
+        inst.config_path.write_text("[options]\ndb_user = x\ndbfilter = ^erp$\n")
+        operations.allow_database(Runner_(root=True), inst, "new.db")
+        assert expected in inst.config_path.read_text()
+
+
+CERTBOT_TAIL = """
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/erp/fullchain.pem; # managed by Certbot
+"""
+
+
+def _protected_site(make_instance, layout, registry, allow=()):
+    inst = make_instance("shop", mode="server", purpose="production", hardened=True, domain="erp.example.com")
+    registry.add(inst)
+    site = operations._site_path(layout, inst)
+    site.parent.mkdir(parents=True, exist_ok=True)
+    inst.rpc_allow = list(allow)
+    site.write_text(render.nginx_site(inst) + CERTBOT_TAIL)
+    return inst, site
+
+
+def test_api_addresses_change_only_the_api_block(make_instance, layout, registry):
+    inst, site = _protected_site(make_instance, layout, registry)
+    runner = RecordingRunner(root=True)
+    before = site.read_text()
+    operations.set_api_allowed(runner, registry, layout, inst, ["203.0.113.10/32", "2001:db8::/32"])
+    after = site.read_text()
+    assert operations.api_allowed(layout, inst) == ["203.0.113.10/32", "2001:db8::/32"]
+    block = after.split("(xmlrpc|jsonrpc)")[1].split("}")[0]
+    assert block.index("allow 2001:db8::/32;") < block.index("deny all;")
+    assert "managed by Certbot" in after and "proxy_pass" in block
+    assert runner.joined() == ["nginx -t", "systemctl reload nginx"]
+    assert registry.get("shop").rpc_allow == ["203.0.113.10/32", "2001:db8::/32"]
+    operations.set_api_allowed(runner, registry, layout, inst, [])
+    assert site.read_text() == before
+
+
+def test_api_change_is_undone_when_nginx_rejects_it(make_instance, layout, registry):
+    inst, site = _protected_site(make_instance, layout, registry, ["203.0.113.10/32"])
+    before = site.read_text()
+    with pytest.raises(CommandError):
+        operations.set_api_allowed(RecordingRunner(root=True, fail_on="nginx -t"), registry, layout, inst, [])
+    assert site.read_text() == before
+    assert registry.get("shop").rpc_allow == []  # registered without the address in this test
+
+
+def test_api_block_edited_by_hand(make_instance, layout, registry):
+    inst, site = _protected_site(make_instance, layout, registry)
+    text = site.read_text()
+    block_end = text.index("deny all;", text.index("(xmlrpc|jsonrpc)"))
+    edited = (
+        text[:block_end] + "# partner\n        allow 198.51.100.7; # by hand\n        " + text[block_end:]
+    )
+    site.write_text(edited)
+    assert operations.api_allowed(layout, inst) == ["198.51.100.7"]
+    operations.set_api_allowed(RecordingRunner(root=True), registry, layout, inst, ["198.51.100.7"])
+    assert "# partner" in site.read_text()
+    site.write_text(text.replace("deny all;", "", 2))
+    with pytest.raises(ValueError, match="edited by hand"):
+        operations.api_allowed(layout, inst)
