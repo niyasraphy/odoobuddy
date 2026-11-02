@@ -1,6 +1,6 @@
 """odoobuddy: install and manage multiple Odoo instances, locally or on servers."""
 
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 AUTHOR = "Niyas Raphy"
 SUPPORT_EMAIL = "niyasraphyk@gmail.com"

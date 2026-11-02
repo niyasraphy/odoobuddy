@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - 2026-11-02
 
 ### Security
 New production installs are protected against bots that guess the admin password over XML-RPC,
