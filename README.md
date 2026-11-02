@@ -9,6 +9,8 @@
 
 📖 **Documentation:** https://niyasraphy.github.io/odoobuddy/
 
+📦 **PyPI:** https://pypi.org/project/odoobuddy/
+
 **Install and manage many Odoo instances, of any version, on your laptop or on production servers, with one command.**
 
 ```bash

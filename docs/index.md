@@ -5,6 +5,8 @@ servers, with one command.**
 
 ![odoobuddy demo](assets/demo.gif)
 
+📦 **PyPI:** <https://pypi.org/project/odoobuddy/>
+
 ```bash
 sudo apt install pipx        # if you don't have it yet
 pipx install odoobuddy
